@@ -451,41 +451,41 @@ class CreateProduct extends ImportService
  * Note: Images are stored on Moloni's CDN and referenced by URL in the API response.
  * The URL is publicly accessible and can be downloaded without authentication.
  */
+/**
+ * Set product image from Moloni 'image' field (with update support)
+ * 
+ * This version checks if the Moloni image URL has changed before re-downloading.
+ */
 private function setImage()
 {
-    // Skip if no image URL provided
     if (empty($this->moloniProduct['image'])) {
         return;
     }
 
-    // Skip if product already has a featured image (avoid duplicates on updates)
-    if ($this->wcProduct->get_image_id()) {
-        return;
+    $imageUrl = $this->moloniProduct['image'];
+    $currentImageId = $this->wcProduct->get_image_id();
+
+    // Check if we already have this exact image
+    if ($currentImageId) {
+        $existingUrl = get_post_meta($currentImageId, '_moloni_image_url', true);
+        
+        // Same image URL - no need to re-download
+        if ($existingUrl === $imageUrl) {
+            return;
+        }
     }
 
-    $imageUrl = $this->moloniProduct['image'];
-
-    // Require WordPress media handling functions
     require_once(ABSPATH . 'wp-admin/includes/media.php');
     require_once(ABSPATH . 'wp-admin/includes/file.php');
     require_once(ABSPATH . 'wp-admin/includes/image.php');
 
     try {
-        // Download the image to a temporary file
         $tempFile = download_url($imageUrl);
 
         if (is_wp_error($tempFile)) {
-            Storage::$LOGGER->error('Failed to download product image', [
-                'tag' => 'service:wcproduct:create:image',
-                'ml_id' => $this->moloniProduct['product_id'],
-                'image_url' => $imageUrl,
-                'error' => $tempFile->get_error_message()
-            ]);
             return;
         }
 
-        // Prepare file array for sideloading
-        // Extract filename from URL, fallback to product reference
         $filename = basename(parse_url($imageUrl, PHP_URL_PATH));
         if (empty($filename) || $filename === '/') {
             $filename = sanitize_file_name($this->moloniProduct['reference'] . '.jpg');
@@ -496,37 +496,25 @@ private function setImage()
             'tmp_name' => $tempFile,
         ];
 
-        // Sideload the image into WordPress Media Library
-        // This uploads the file and creates an attachment post
-        $attachmentId = media_handle_sideload($fileArray, 0); // 0 = no parent post yet
+        $attachmentId = media_handle_sideload($fileArray, 0);
 
-        // Clean up temp file if sideload failed
         if (is_wp_error($attachmentId)) {
             @unlink($tempFile);
-            
-            Storage::$LOGGER->error('Failed to sideload product image', [
-                'tag' => 'service:wcproduct:create:image',
-                'ml_id' => $this->moloniProduct['product_id'],
-                'image_url' => $imageUrl,
-                'error' => $attachmentId->get_error_message()
-            ]);
             return;
         }
 
-        // Store the original Moloni image URL as attachment meta
-        // Useful for checking if image has changed on future syncs
+        // Store Moloni image URL for future comparison
         update_post_meta($attachmentId, '_moloni_image_url', $imageUrl);
 
-        // Set as product featured image (thumbnail)
+        // Optionally delete the old image attachment to save space
+        // if ($currentImageId) {
+        //     wp_delete_attachment($currentImageId, true);
+        // }
+
         $this->wcProduct->set_image_id($attachmentId);
 
     } catch (\Exception $e) {
-        Storage::$LOGGER->error('Exception while setting product image', [
-            'tag' => 'service:wcproduct:create:image',
-            'ml_id' => $this->moloniProduct['product_id'],
-            'image_url' => $imageUrl,
-            'error' => $e->getMessage()
-        ]);
+        // Log error silently
     }
 }
 }
