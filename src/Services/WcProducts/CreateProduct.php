@@ -80,6 +80,7 @@ class CreateProduct extends ImportService
         $this->setVisibility();
         $this->setStock();
         $this->setEan();
+        $this->setImage();
 
         $this->wcProduct->save(); // Persist product to database
     }
@@ -431,4 +432,101 @@ class CreateProduct extends ImportService
     {
         $this->wcProduct->add_meta_data('_barcode', $this->moloniProduct['ean']);
     }
+    /**
+ * Set product image from Moloni 'image' field
+ * 
+ * Moloni API field: image (string) - URL to product image
+ * Maps to: WooCommerce Featured Image (Product Thumbnail)
+ * 
+ * Moloni products/getOne response includes:
+ * - image: string - Full URL to the product image hosted on Moloni servers
+ *                   e.g., "https://www.moloni.pt/_imagens/[...]/image.jpg"
+ * 
+ * This method:
+ * 1. Checks if the product already has an image (skip if exists to avoid duplicates)
+ * 2. Downloads the image from Moloni's servers
+ * 3. Uploads it to WordPress Media Library
+ * 4. Sets it as the product's featured image (thumbnail)
+ * 
+ * Note: Images are stored on Moloni's CDN and referenced by URL in the API response.
+ * The URL is publicly accessible and can be downloaded without authentication.
+ */
+private function setImage()
+{
+    // Skip if no image URL provided
+    if (empty($this->moloniProduct['image'])) {
+        return;
+    }
+
+    // Skip if product already has a featured image (avoid duplicates on updates)
+    if ($this->wcProduct->get_image_id()) {
+        return;
+    }
+
+    $imageUrl = $this->moloniProduct['image'];
+
+    // Require WordPress media handling functions
+    require_once(ABSPATH . 'wp-admin/includes/media.php');
+    require_once(ABSPATH . 'wp-admin/includes/file.php');
+    require_once(ABSPATH . 'wp-admin/includes/image.php');
+
+    try {
+        // Download the image to a temporary file
+        $tempFile = download_url($imageUrl);
+
+        if (is_wp_error($tempFile)) {
+            Storage::$LOGGER->error('Failed to download product image', [
+                'tag' => 'service:wcproduct:create:image',
+                'ml_id' => $this->moloniProduct['product_id'],
+                'image_url' => $imageUrl,
+                'error' => $tempFile->get_error_message()
+            ]);
+            return;
+        }
+
+        // Prepare file array for sideloading
+        // Extract filename from URL, fallback to product reference
+        $filename = basename(parse_url($imageUrl, PHP_URL_PATH));
+        if (empty($filename) || $filename === '/') {
+            $filename = sanitize_file_name($this->moloniProduct['reference'] . '.jpg');
+        }
+
+        $fileArray = [
+            'name'     => $filename,
+            'tmp_name' => $tempFile,
+        ];
+
+        // Sideload the image into WordPress Media Library
+        // This uploads the file and creates an attachment post
+        $attachmentId = media_handle_sideload($fileArray, 0); // 0 = no parent post yet
+
+        // Clean up temp file if sideload failed
+        if (is_wp_error($attachmentId)) {
+            @unlink($tempFile);
+            
+            Storage::$LOGGER->error('Failed to sideload product image', [
+                'tag' => 'service:wcproduct:create:image',
+                'ml_id' => $this->moloniProduct['product_id'],
+                'image_url' => $imageUrl,
+                'error' => $attachmentId->get_error_message()
+            ]);
+            return;
+        }
+
+        // Store the original Moloni image URL as attachment meta
+        // Useful for checking if image has changed on future syncs
+        update_post_meta($attachmentId, '_moloni_image_url', $imageUrl);
+
+        // Set as product featured image (thumbnail)
+        $this->wcProduct->set_image_id($attachmentId);
+
+    } catch (\Exception $e) {
+        Storage::$LOGGER->error('Exception while setting product image', [
+            'tag' => 'service:wcproduct:create:image',
+            'ml_id' => $this->moloniProduct['product_id'],
+            'image_url' => $imageUrl,
+            'error' => $e->getMessage()
+        ]);
+    }
+}
 }
