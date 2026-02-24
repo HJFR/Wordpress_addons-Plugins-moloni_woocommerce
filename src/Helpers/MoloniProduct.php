@@ -2,7 +2,9 @@
 
 namespace Moloni\Helpers;
 
+use WC_Product;
 use Moloni\Curl;
+use Moloni\Storage;
 use Moloni\Exceptions\APIException;
 
 class MoloniProduct
@@ -53,5 +55,81 @@ class MoloniProduct
         }
 
         return 0;
+    }
+
+    /**
+     * Fetch the last cost price for a product from Moloni API
+     *
+     * @param int $productId Moloni product ID
+     *
+     * @return float|null Cost price or null if unavailable
+     */
+    public static function fetchCostPrice(int $productId): ?float
+    {
+        try {
+            $response = Curl::simple('products/getLastCostPrice', [
+                'product_id' => $productId,
+            ]);
+        } catch (APIException $e) {
+            Storage::$LOGGER->warning(
+                str_replace('{0}', (string)$productId, __('Erro ao obter preço de custo do produto ({0})')),
+                [
+                    'tag' => 'helper:moloniproduct:costprice',
+                    'ml_id' => $productId,
+                    'message' => $e->getMessage(),
+                ]
+            );
+
+            return null;
+        }
+
+        if (empty($response) || !isset($response['cost_price'])) {
+            return null;
+        }
+
+        return (float)$response['cost_price'];
+    }
+
+    /**
+     * Set cost price on a WooCommerce product
+     *
+     * Uses native WC COGS if enabled, otherwise falls back to custom meta
+     *
+     * @param WC_Product $product WooCommerce product
+     * @param float|null $costPrice Cost price value
+     */
+    public static function setCostPriceOnWcProduct(WC_Product $product, ?float $costPrice): void
+    {
+        if ($costPrice === null) {
+            return;
+        }
+
+        if (self::isWcCogsEnabled()) {
+            $product->set_cogs_value($costPrice);
+        } else {
+            $product->update_meta_data('_moloni_cost_price', $costPrice);
+        }
+    }
+
+    /**
+     * Check if WooCommerce native COGS feature is enabled
+     *
+     * @return bool
+     */
+    public static function isWcCogsEnabled(): bool
+    {
+        if (!method_exists('WC_Product', 'set_cogs_value')) {
+            return false;
+        }
+
+        try {
+            $featuresController = wc_get_container()->get(
+                'Automattic\WooCommerce\Internal\Features\FeaturesController'
+            );
+
+            return $featuresController->feature_is_enabled('cost_of_goods_sold');
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }

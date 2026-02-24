@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "WebFetch(domain:www.moloni.pt)",
+      "WebFetch(domain:developer.woocommerce.com)",
+      "WebFetch(domain:woocommerce.com)",
+      "Bash(php -l:*)",
+      "Bash(php:*)"
+    ]
+  }
+}

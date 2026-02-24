@@ -7,6 +7,7 @@ use Moloni\Storage;
 use Moloni\Exceptions\APIException;
 use Moloni\Exceptions\Stocks\StockLockedException;
 use Moloni\Exceptions\Stocks\StockMatchingException;
+use Moloni\Helpers\MoloniProduct;
 use Moloni\Services\WcProducts\UpdateProductStock;
 
 class SyncStockFromMoloni
@@ -82,6 +83,9 @@ class SyncStockFromMoloni
             } catch (StockLockedException $error) {
                 $this->locked[$product['reference']] = $error->getMessage();
             }
+
+            // Sync cost price independently of stock changes
+            $this->syncCostPrice($product, $wcProduct);
         }
 
         return $this;
@@ -189,6 +193,34 @@ class SyncStockFromMoloni
     public function getLocked(): array
     {
         return $this->locked;
+    }
+
+    //            Cost Price            //
+
+    /**
+     * Sync cost price from Moloni to WooCommerce for a single product
+     *
+     * @param array $product Moloni product data
+     * @param \WC_Product $wcProduct WooCommerce product
+     */
+    private function syncCostPrice(array $product, $wcProduct): void
+    {
+        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
+            return;
+        }
+
+        if (empty($product['product_id'])) {
+            return;
+        }
+
+        $costPrice = MoloniProduct::fetchCostPrice((int)$product['product_id']);
+
+        if ($costPrice === null) {
+            return;
+        }
+
+        MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
+        $wcProduct->save();
     }
 
     //            Auxiliary            //

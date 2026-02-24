@@ -68,12 +68,14 @@ class CreateProduct extends ImportService
      * - Moloni 'visibility_id' → WC Catalog Visibility
      * - Moloni 'has_stock'/'stock' → WC Stock Management
      * - Moloni 'ean' → WC Meta '_barcode'
+     * - Moloni 'getLastCostPrice' → WC COGS value (if enabled)
      */
     public function run()
     {
         $this->setName();
         $this->setReference();
         $this->setPrice();
+        $this->setCostPrice();
         $this->setTaxes();
         $this->setCategories();
         $this->setDescription();
@@ -174,6 +176,26 @@ class CreateProduct extends ImportService
         }
 
         $this->wcProduct->set_regular_price($price);
+    }
+
+    /**
+     * Set product cost price from Moloni via getLastCostPrice API
+     *
+     * Fetches the last known cost price from Moloni and stores it in
+     * WooCommerce using the native COGS field (if enabled) or custom meta.
+     *
+     * Guarded by the MOLONI_COST_PRICE_SYNC setting.
+     * Failures are silently logged — cost sync should not block product creation.
+     */
+    private function setCostPrice()
+    {
+        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
+            return;
+        }
+
+        $costPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
+
+        MoloniProduct::setCostPriceOnWcProduct($this->wcProduct, $costPrice);
     }
 
     /**

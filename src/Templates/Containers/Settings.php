@@ -919,6 +919,33 @@ try {
                     <p class='description'><?php esc_html_e('Ao guardar um artigo no WooCommerce, se o artigo já existir no Moloni vai atualizar os dados do artigo') ?></p>
                 </td>
             </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_cost_price_sync"><?php esc_html_e('Sincronizar preço de custo') ?></label>
+                </th>
+                <td>
+                    <?php
+                    $moloniCostPriceSync = 0;
+
+                    if (defined('MOLONI_COST_PRICE_SYNC')) {
+                        $moloniCostPriceSync = (int)MOLONI_COST_PRICE_SYNC;
+                    }
+                    ?>
+
+                    <select id="moloni_cost_price_sync" name='opt[moloni_cost_price_sync]' class='inputOut'>
+                        <option value='0' <?= ($moloniCostPriceSync === 0 ? 'selected' : '') ?>>
+                            <?php esc_html_e('Não') ?>
+                        </option>
+                        <option value='1' <?= ($moloniCostPriceSync === 1 ? 'selected' : '') ?>>
+                            <?php esc_html_e('Sim') ?>
+                        </option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Sincronizar automaticamente o preço de custo dos artigos do Moloni para o WooCommerce (utiliza o campo COGS nativo do WooCommerce se disponível)') ?>
+                    </p>
+                </td>
+            </tr>
             </tbody>
         </table>
 

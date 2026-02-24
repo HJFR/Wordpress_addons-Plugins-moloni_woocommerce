@@ -8,6 +8,7 @@ use Moloni\Helpers\MoloniProduct;
 use Moloni\Storage;
 use WC_Product;
 
+
 /**
  * Class UpdateProductStock
  * 
@@ -119,6 +120,9 @@ class UpdateProductStock extends ImportService
         // Perform the actual stock update in WooCommerce
         wc_update_product_stock($this->wcProduct, $this->moloniStock);
 
+        // Update cost price if enabled
+        $this->updateCostPrice();
+
         // Prepare human-readable result message
         $this->resultMessage = sprintf(
             __('Stock atualizado no WooCommerce (antes: %s | depois: %s) (%s)'),
@@ -182,8 +186,37 @@ class UpdateProductStock extends ImportService
     //            Privates            //
 
     /**
+     * Update cost price from Moloni if setting is enabled
+     *
+     * Fetches the last cost price from Moloni API and sets it on
+     * the WooCommerce product using native COGS or fallback meta.
+     */
+    private function updateCostPrice(): void
+    {
+        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
+            return;
+        }
+
+        $costPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
+
+        if ($costPrice === null) {
+            return;
+        }
+
+        // Reload product to get fresh object after stock update
+        $wcProduct = wc_get_product($this->wcProduct->get_id());
+
+        if (!$wcProduct) {
+            return;
+        }
+
+        MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
+        $wcProduct->save();
+    }
+
+    /**
      * Initialize stock values from both systems
-     * 
+     *
      * Retrieves and stores:
      * - Moloni stock: Parsed from product data for the specified warehouse
      * - WooCommerce stock: Current stock quantity from the WC product
