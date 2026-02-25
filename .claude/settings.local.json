@@ -6,7 +6,8 @@
       "WebFetch(domain:developer.woocommerce.com)",
       "WebFetch(domain:woocommerce.com)",
       "Bash(php -l:*)",
-      "Bash(php:*)"
+      "Bash(php:*)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

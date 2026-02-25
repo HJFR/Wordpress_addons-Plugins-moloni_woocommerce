@@ -4,7 +4,9 @@ namespace Moloni\Helpers;
 
 use WC_Product;
 use Moloni\Curl;
+use Moloni\Notice;
 use Moloni\Storage;
+use Moloni\Enums\SaftType;
 use Moloni\Exceptions\APIException;
 
 class MoloniProduct
@@ -131,5 +133,107 @@ class MoloniProduct
         } catch (\Exception $e) {
             return false;
         }
+    }
+
+    /**
+     * Calculate the minimum sale price based on cost price, margin and VAT
+     *
+     * Formula: cost_price × margin × VAT_multiplier (if WC includes tax)
+     *          cost_price × margin (if WC excludes tax)
+     *
+     * @param float $costPrice Product cost price from Moloni
+     * @param array $moloniTaxes Moloni taxes array from product data
+     *
+     * @return float Minimum sale price (in WC price format — with or without tax)
+     */
+    public static function calculateMinimumSalePrice(float $costPrice, array $moloniTaxes): float
+    {
+        if ($costPrice <= 0) {
+            return 0.0;
+        }
+
+        $margin = 1.3;
+
+        if (defined('MOLONI_COST_PRICE_MARGIN') && (float)MOLONI_COST_PRICE_MARGIN >= 1.0) {
+            $margin = (float)MOLONI_COST_PRICE_MARGIN;
+        }
+
+        $minimumPrice = $costPrice * $margin;
+
+        // If WooCommerce stores prices INCLUDING tax, apply VAT to the minimum
+        if (wc_prices_include_tax() && !empty($moloniTaxes)) {
+            $ivaRate = 0.0;
+
+            foreach ($moloniTaxes as $tax) {
+                $taxData = $tax['tax'] ?? $tax;
+
+                // Only sum IVA taxes (saft_type = 1), not stamp duty or others
+                if (isset($taxData['saft_type']) && (int)$taxData['saft_type'] === SaftType::IVA) {
+                    $ivaRate += (float)($taxData['value'] ?? $tax['value'] ?? 0);
+                }
+            }
+
+            if ($ivaRate > 0) {
+                $minimumPrice *= (1 + $ivaRate / 100);
+            }
+        }
+
+        return round($minimumPrice, 2);
+    }
+
+    /**
+     * Enforce minimum sale price on a WooCommerce product
+     *
+     * Compares current regular price against the calculated minimum.
+     * If selling below cost: auto-corrects the price and warns admin.
+     *
+     * @param WC_Product $product WooCommerce product
+     * @param float $costPrice Cost price from Moloni
+     * @param array $moloniTaxes Moloni taxes array
+     * @param string $reference Product SKU/reference for logging
+     *
+     * @return bool True if price was adjusted, false otherwise
+     */
+    public static function enforceMinimumPrice(
+        WC_Product $product,
+        float $costPrice,
+        array $moloniTaxes,
+        string $reference
+    ): bool {
+        $minimumPrice = self::calculateMinimumSalePrice($costPrice, $moloniTaxes);
+
+        if ($minimumPrice <= 0) {
+            return false;
+        }
+
+        $currentPrice = (float)$product->get_regular_price();
+
+        // Only enforce if a price is already set and it's below minimum
+        if ($currentPrice <= 0 || $currentPrice >= $minimumPrice) {
+            return false;
+        }
+
+        $product->set_regular_price($minimumPrice);
+
+        // Log the adjustment
+        $message = sprintf(
+            __('Preço do produto %s ajustado de %.2f€ para %.2f€ (abaixo do custo mínimo de venda)'),
+            $reference,
+            $currentPrice,
+            $minimumPrice
+        );
+
+        Storage::$LOGGER->warning($message, [
+            'tag' => 'helper:moloniproduct:minimumprice',
+            'reference' => $reference,
+            'wc_id' => $product->get_id(),
+            'old_price' => $currentPrice,
+            'new_price' => $minimumPrice,
+            'cost_price' => $costPrice,
+        ]);
+
+        Notice::addMessageWarning($message);
+
+        return true;
     }
 }

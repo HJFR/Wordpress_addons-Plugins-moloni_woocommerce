@@ -198,9 +198,9 @@ class SyncStockFromMoloni
     //            Cost Price            //
 
     /**
-     * Sync cost price from Moloni to WooCommerce for a single product
+     * Sync cost price from Moloni to WooCommerce and enforce minimum sale price
      *
-     * @param array $product Moloni product data
+     * @param array $product Moloni product data (includes taxes array)
      * @param \WC_Product $wcProduct WooCommerce product
      */
     private function syncCostPrice(array $product, $wcProduct): void
@@ -220,6 +220,15 @@ class SyncStockFromMoloni
         }
 
         MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
+
+        // Enforce minimum sale price based on cost
+        MoloniProduct::enforceMinimumPrice(
+            $wcProduct,
+            $costPrice,
+            $product['taxes'] ?? [],
+            $product['reference'] ?? ''
+        );
+
         $wcProduct->save();
     }
 

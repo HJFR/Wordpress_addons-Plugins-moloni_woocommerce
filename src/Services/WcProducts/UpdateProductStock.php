@@ -186,10 +186,11 @@ class UpdateProductStock extends ImportService
     //            Privates            //
 
     /**
-     * Update cost price from Moloni if setting is enabled
+     * Update cost price from Moloni and enforce minimum sale price
      *
-     * Fetches the last cost price from Moloni API and sets it on
-     * the WooCommerce product using native COGS or fallback meta.
+     * Fetches the last cost price from Moloni API, sets it on
+     * the WooCommerce product, then validates the selling price
+     * against the calculated minimum (cost × margin × VAT).
      */
     private function updateCostPrice(): void
     {
@@ -211,6 +212,15 @@ class UpdateProductStock extends ImportService
         }
 
         MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
+
+        // Enforce minimum sale price based on cost
+        MoloniProduct::enforceMinimumPrice(
+            $wcProduct,
+            $costPrice,
+            $this->moloniProduct['taxes'] ?? [],
+            $this->moloniProduct['reference'] ?? ''
+        );
+
         $wcProduct->save();
     }
 

@@ -76,6 +76,7 @@ class CreateProduct extends ImportService
         $this->setReference();
         $this->setPrice();
         $this->setCostPrice();
+        $this->enforceMinimumPrice();
         $this->setTaxes();
         $this->setCategories();
         $this->setDescription();
@@ -178,6 +179,9 @@ class CreateProduct extends ImportService
         $this->wcProduct->set_regular_price($price);
     }
 
+    /** @var float|null Cached cost price fetched from Moloni */
+    private $lastFetchedCostPrice = null;
+
     /**
      * Set product cost price from Moloni via getLastCostPrice API
      *
@@ -193,9 +197,30 @@ class CreateProduct extends ImportService
             return;
         }
 
-        $costPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
+        $this->lastFetchedCostPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
 
-        MoloniProduct::setCostPriceOnWcProduct($this->wcProduct, $costPrice);
+        MoloniProduct::setCostPriceOnWcProduct($this->wcProduct, $this->lastFetchedCostPrice);
+    }
+
+    /**
+     * Enforce minimum sale price based on cost price and configured margin
+     *
+     * If the current WC regular price is below the calculated minimum
+     * (cost × margin × VAT), auto-corrects it and warns the admin.
+     * Must be called after setCostPrice() so cost data is available.
+     */
+    private function enforceMinimumPrice()
+    {
+        if ($this->lastFetchedCostPrice === null || $this->lastFetchedCostPrice <= 0) {
+            return;
+        }
+
+        MoloniProduct::enforceMinimumPrice(
+            $this->wcProduct,
+            $this->lastFetchedCostPrice,
+            $this->moloniProduct['taxes'] ?? [],
+            $this->moloniProduct['reference'] ?? ''
+        );
     }
 
     /**

@@ -946,6 +946,34 @@ try {
                     </p>
                 </td>
             </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_cost_price_margin"><?php esc_html_e('Margem mínima de venda') ?></label>
+                </th>
+                <td>
+                    <?php
+                    $moloniCostPriceMargin = '1.30';
+
+                    if (defined('MOLONI_COST_PRICE_MARGIN') && (float)MOLONI_COST_PRICE_MARGIN >= 1.0) {
+                        $moloniCostPriceMargin = number_format((float)MOLONI_COST_PRICE_MARGIN, 2, '.', '');
+                    }
+                    ?>
+
+                    <input type="number"
+                           id="moloni_cost_price_margin"
+                           name="opt[moloni_cost_price_margin]"
+                           class="inputOut"
+                           value="<?= esc_attr($moloniCostPriceMargin) ?>"
+                           step="0.01"
+                           min="1.00"
+                           style="width: 100px;"
+                    />
+                    <p class='description'>
+                        <?php esc_html_e('Multiplicador aplicado ao preço de custo para calcular o preço mínimo de venda (ex: 1.30 = 30% de margem). Se o preço de venda for inferior ao mínimo calculado (custo × margem × IVA), será ajustado automaticamente.') ?>
+                    </p>
+                </td>
+            </tr>
             </tbody>
         </table>
 
