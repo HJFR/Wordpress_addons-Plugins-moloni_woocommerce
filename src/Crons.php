@@ -58,12 +58,24 @@ class Crons
                     Storage::$LOGGER->info(__('Sincronização de stock automática'), [
                         'action' => 'stock:sync:cron',
                         'since' => $service->getSince(),
+                        'truncated' => $service->wasTruncated(),
                         'equal' => $service->getEqual(),
                         'not_found' => $service->getNotFound(),
                         'get_updated' => $service->getUpdated(),
                         'get_locked' => $service->getLocked(),
                     ]);
                 }
+
+                // If the run was truncated (per-tick cap hit OR API error) keep
+                // the existing watermark so the next cron tick re-fetches the
+                // same window and processes what we missed. Otherwise advance.
+                if (!$service->wasTruncated()) {
+                    Model::setOption('moloni_stock_sync_time', $runningAt);
+                }
+            } else {
+                // Stock sync disabled — still advance watermark so we don't
+                // accumulate a stale window if it's re-enabled later.
+                Model::setOption('moloni_stock_sync_time', $runningAt);
             }
         } catch (Exception $ex) {
             Storage::$LOGGER->critical(__('Erro fatal'), [
@@ -71,8 +83,6 @@ class Crons
                 'exception' => $ex->getMessage()
             ]);
         }
-
-        Model::setOption('moloni_stock_sync_time', $runningAt);
 
         return true;
     }

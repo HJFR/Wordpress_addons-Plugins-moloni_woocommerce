@@ -12,10 +12,30 @@ use Moloni\Services\WcProducts\UpdateProductStock;
 
 class SyncStockFromMoloni
 {
+    /**
+     * Default cap on products processed per cron tick. Tunable via the
+     * MOLONI_SYNC_MAX_PRODUCTS constant (set in plugin settings / DB).
+     * When the cap is hit, the sync is marked truncated so the caller can
+     * decide whether to advance the watermark or retry from the same point.
+     */
+    private const DEFAULT_MAX_PRODUCTS = 2000;
+
+    /**
+     * Default throttle (microseconds) between paginated API calls AND between
+     * per-product processing iterations. ~5 req/s budget by default; tunable via
+     * MOLONI_SYNC_THROTTLE_US (set 0 to disable).
+     */
+    private const DEFAULT_THROTTLE_US = 200000; // 200 ms
+
+    /** Moloni hard page size for products/getModifiedSince */
+    private const PAGE_SIZE = 50;
+
     private $since;
 
     private $offset = 0;
-    private $limit = 5000;
+    private $limit;
+    private $throttleUs;
+    private $truncated = false;
     private $found = 0;
 
     private $updated = [];
@@ -36,6 +56,16 @@ class SyncStockFromMoloni
         }
 
         $this->since = gmdate('Y-m-d H:i:s', $sinceTime);
+
+        $this->limit = self::DEFAULT_MAX_PRODUCTS;
+        if (defined('MOLONI_SYNC_MAX_PRODUCTS') && (int)MOLONI_SYNC_MAX_PRODUCTS > 0) {
+            $this->limit = (int)MOLONI_SYNC_MAX_PRODUCTS;
+        }
+
+        $this->throttleUs = self::DEFAULT_THROTTLE_US;
+        if (defined('MOLONI_SYNC_THROTTLE_US') && (int)MOLONI_SYNC_THROTTLE_US >= 0) {
+            $this->throttleUs = (int)MOLONI_SYNC_THROTTLE_US;
+        }
     }
 
     //            Publics            //
@@ -54,21 +84,38 @@ class SyncStockFromMoloni
         $this->found = count($updatedProducts);
 
         foreach ($updatedProducts as $product) {
+            if (empty($product['reference']) || !is_string($product['reference'])) {
+                continue;
+            }
+
+            $reference = $product['reference'];
+
             if (empty($product['has_stock'])) {
-                $this->notFound[$product['reference']] = __('Artigo sem stock ativo');
+                $this->notFound[$reference] = __('Artigo sem stock ativo');
 
                 continue;
             }
 
-            $wcProductId = wc_get_product_id_by_sku($product['reference']);
+            $wcProductId = wc_get_product_id_by_sku($reference);
 
             if ($wcProductId <= 0) {
-                $this->notFound[$product['reference']] = __('Artigo não encontrado');
+                $this->notFound[$reference] = __('Artigo não encontrado');
 
                 continue;
             }
 
             $wcProduct = wc_get_product($wcProductId);
+
+            if (!$wcProduct) {
+                $this->notFound[$reference] = __('Artigo não encontrado');
+
+                continue;
+            }
+
+            // UpdateProductStock::run() does its own cost-price sync on the
+            // refreshed product instance, so only fall back to syncCostPrice
+            // when stock processing did NOT execute (match / locked / error).
+            $costSyncHandledByStockService = false;
 
             try {
                 $service = new UpdateProductStock($wcProduct, $product);
@@ -77,18 +124,41 @@ class SyncStockFromMoloni
 
                 $service->run();
 
-                $this->updated[$product['reference']] = $service->getResultMessage();
+                $this->updated[$reference] = $service->getResultMessage();
+                $costSyncHandledByStockService = true;
             } catch (StockMatchingException $error) {
-                $this->equal[$product['reference']] = $error->getMessage();
+                $this->equal[$reference] = $error->getMessage();
             } catch (StockLockedException $error) {
-                $this->locked[$product['reference']] = $error->getMessage();
+                $this->locked[$reference] = $error->getMessage();
             }
 
-            // Sync cost price independently of stock changes
-            $this->syncCostPrice($product, $wcProduct);
+            if (!$costSyncHandledByStockService) {
+                // Reload to avoid acting on a stale object — the stock service
+                // may have already persisted unrelated changes.
+                $freshProduct = wc_get_product($wcProductId);
+
+                if ($freshProduct) {
+                    $this->syncCostPrice($product, $freshProduct);
+                }
+            }
+
+            // Throttle per-product to keep aggregate API rate well under the
+            // Moloni 429 threshold. fetchCostPrice = 1 extra call per product.
+            if ($this->throttleUs > 0) {
+                usleep($this->throttleUs);
+            }
         }
 
         return $this;
+    }
+
+    /**
+     * Whether the sync stopped because it hit the per-tick product cap.
+     * Callers should NOT advance the watermark when truncated.
+     */
+    public function wasTruncated(): bool
+    {
+        return $this->truncated;
     }
 
     //            Counts            //
@@ -235,8 +305,13 @@ class SyncStockFromMoloni
     //            Auxiliary            //
 
     /**
-     * Each request brings a maximum of 50 products
-     * While there are more products we keep asking for more
+     * Fetch all modified products from Moloni, paginated.
+     *
+     * Moloni caps responses at 50 records per request (products/getModifiedSince).
+     * We paginate via offset, throttle between requests, and stop when either:
+     *   - the API returns fewer than PAGE_SIZE results (last page reached),
+     *   - the cumulative count reaches the per-tick cap (sets $this->truncated),
+     *   - the API errors out (stop, do not infinite-loop).
      *
      * @return array
      */
@@ -248,40 +323,63 @@ class SyncStockFromMoloni
             $values = [
                 'company_id' => Storage::$MOLONI_COMPANY_ID,
                 'lastmodified' => $this->since,
-                'offset' => $this->offset
+                'offset' => $this->offset,
+                'qty' => self::PAGE_SIZE,
             ];
 
             try {
                 $fetched = Curl::simple('products/getModifiedSince', $values);
             } catch (APIException $e) {
-                $fetched = [];
-
                 Storage::$LOGGER->error(__('Atenção, erro ao obter todos os artigos via API'), [
                     'action' => 'stock:sync:service',
                     'message' => $e->getMessage(),
                     'exception' => $e->getData(),
                 ]);
-            }
 
-            /** Fail-safe - When a request brings no product at all */
-            if (isset($fetched[0]['product_id'])) {
-                foreach ($fetched as $item) {
-                    $productsList[] = $item;
-                }
+                // Mark as truncated so caller does not advance the watermark
+                // past products we never saw.
+                $this->truncated = true;
 
-                $this->offset += count($fetched);
-            } else {
                 break;
             }
 
-            /** If the requests do not bring the maximum of 50 products */
-            if (count($fetched) < 50) {
+            // No more products (empty page or unexpected shape)
+            if (!is_array($fetched) || !isset($fetched[0]['product_id'])) {
                 break;
             }
 
-            /** If the products list is bigger than the limit defined */
-            if (count($productsList) > $this->limit) {
+            foreach ($fetched as $item) {
+                $productsList[] = $item;
+            }
+
+            $this->offset += count($fetched);
+
+            // Last page (partial fill)
+            if (count($fetched) < self::PAGE_SIZE) {
                 break;
+            }
+
+            // Hit the per-tick cap — stop and signal truncation so the next
+            // cron tick will resume from the same watermark.
+            if (count($productsList) >= $this->limit) {
+                $this->truncated = true;
+
+                Storage::$LOGGER->warning(
+                    __('Sincronização de stock truncada: limite de produtos por ciclo atingido'),
+                    [
+                        'action' => 'stock:sync:service:truncated',
+                        'limit' => $this->limit,
+                        'fetched_so_far' => count($productsList),
+                        'next_offset' => $this->offset,
+                    ]
+                );
+
+                break;
+            }
+
+            // Throttle between paginated fetches.
+            if ($this->throttleUs > 0) {
+                usleep($this->throttleUs);
             }
         }
 

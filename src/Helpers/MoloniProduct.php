@@ -184,8 +184,14 @@ class MoloniProduct
     /**
      * Enforce minimum sale price on a WooCommerce product
      *
-     * Compares current regular price against the calculated minimum.
-     * If selling below cost: auto-corrects the price and warns admin.
+     * Two behaviours, in order:
+     *   1. If the product currently has no regular price (0 or empty), initialise it
+     *      to the calculated minimum so the product never ends up shown as €0 after
+     *      a cost-price sync.
+     *   2. Otherwise, if the current price is below the minimum, lower-bound it.
+     *
+     * Variable products are skipped: their displayed price derives from variations,
+     * not the parent's regular_price.
      *
      * @param WC_Product $product WooCommerce product
      * @param float $costPrice Cost price from Moloni
@@ -200,24 +206,52 @@ class MoloniProduct
         array $moloniTaxes,
         string $reference
     ): bool {
+        // Variable parents have no own price — variations carry the price.
+        if (method_exists($product, 'is_type') && $product->is_type('variable')) {
+            return false;
+        }
+
         $minimumPrice = self::calculateMinimumSalePrice($costPrice, $moloniTaxes);
 
         if ($minimumPrice <= 0) {
             return false;
         }
 
-        $currentPrice = (float)$product->get_regular_price();
+        $rawCurrent = $product->get_regular_price();
+        $hasNoPrice = ($rawCurrent === '' || $rawCurrent === null);
+        $currentPrice = $hasNoPrice ? 0.0 : (float)$rawCurrent;
 
-        // Only enforce if a price is already set and it's below minimum
-        if ($currentPrice <= 0 || $currentPrice >= $minimumPrice) {
+        // No price set → initialise from cost; price below minimum → raise to minimum.
+        if (!$hasNoPrice && $currentPrice > 0 && $currentPrice >= $minimumPrice) {
             return false;
         }
 
-        $product->set_regular_price($minimumPrice);
+        $product->set_regular_price((string)$minimumPrice);
 
-        // Log the adjustment
+        if ($hasNoPrice || $currentPrice <= 0) {
+            $message = sprintf(
+                __('Preço do produto %1$s definido em %2$.2f€ a partir do preço de custo (sem preço de venda anterior)'),
+                $reference,
+                $minimumPrice
+            );
+
+            Storage::$LOGGER->warning($message, [
+                'tag' => 'helper:moloniproduct:minimumprice:init',
+                'reference' => $reference,
+                'wc_id' => $product->get_id(),
+                'new_price' => $minimumPrice,
+                'cost_price' => $costPrice,
+            ]);
+
+            if (!function_exists('wp_doing_cron') || !wp_doing_cron()) {
+                Notice::addMessageWarning($message);
+            }
+
+            return true;
+        }
+
         $message = sprintf(
-            __('Preço do produto %s ajustado de %.2f€ para %.2f€ (abaixo do custo mínimo de venda)'),
+            __('Preço do produto %1$s ajustado de %2$.2f€ para %3$.2f€ (abaixo do custo mínimo de venda)'),
             $reference,
             $currentPrice,
             $minimumPrice
@@ -232,7 +266,9 @@ class MoloniProduct
             'cost_price' => $costPrice,
         ]);
 
-        Notice::addMessageWarning($message);
+        if (!function_exists('wp_doing_cron') || !wp_doing_cron()) {
+            Notice::addMessageWarning($message);
+        }
 
         return true;
     }
