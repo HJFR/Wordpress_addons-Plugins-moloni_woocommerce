@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.0.04
+Stable tag: 5.1.01
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,15 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.1.01 =
+* FIX: Preço de venda não era calculado a partir do custo quando o produto não tinha preço definido (mostrava 0€)
+* FIX: Sincronização de stock truncada agora preserva o watermark — produtos em excesso são processados no próximo ciclo
+* FIX: Evitada chamada duplicada à API getLastCostPrice e reescrita de estado obsoleto após sincronização de stock
+* MINOR: Limite de produtos por ciclo configurável (MOLONI_SYNC_MAX_PRODUCTS, default 2000)
+* MINOR: Throttle configurável entre chamadas à API (MOLONI_SYNC_THROTTLE_US, default 200ms) para evitar HTTP 429
+* MINOR: qty=50 explícito em products/getModifiedSince
+* MINOR: Notice admin suprimida em contexto wp-cron para reduzir escrita em wp_options
+
 = 5.0.04 =
 * FIX: Correção na criação de documentos em massa
 
