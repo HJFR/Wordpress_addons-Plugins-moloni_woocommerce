@@ -1,12 +1,12 @@
 {
-  "name": "moloni-pt/moloni-woocommerce",
-  "description": "Plugin for WooCommerce integration with Moloni",
-  "license": "GPL-3.0",
+  "name": "hjfr/moloni-woocommerce",
+  "description": "WooCommerce ↔ Moloni integration (HJFR fork)",
+  "license": "GPL-2.0-or-later",
   "type": "wordpress-plugin",
   "authors": [
     {
-      "name": "Nuno Almeida",
-      "email": "nuno@moloni.com"
+      "name": "HJFR",
+      "homepage": "https://www.hjfr-info.pt"
     }
   ],
   "require": {

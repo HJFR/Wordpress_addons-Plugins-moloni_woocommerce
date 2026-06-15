@@ -1,10 +1,10 @@
 === Moloni ===
-Contributors: molonidevteam
+Contributors: hjfr
 Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.2.2
+Stable tag: 5.2.3
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,9 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.2.3 =
+* MANUTENÇÃO: Autoria do plugin atribuída a HJFR (fork) — o plugin já diverge substancialmente do original. Licença GPL e copyright original mantidos para conformidade.
+
 = 5.2.2 =
 * NOVO: Limitador de chamadas à API do lado do cliente — respeita o limite do Moloni de 60 pedidos/minuto por chave (janela deslizante de 60s), evitando proativamente o HTTP 429. Configurável via MOLONI_API_MAX_PER_MIN. O retry de 429 mantém-se como rede de segurança.
 * NOVO: A "Sincronização completa" agora continua SOZINHA em segundo plano — basta clicar uma vez; o cron (a cada 5 min) processa lotes de 50 até concluir todo o catálogo, sem exceder o limite da API nem o timeout do PHP. Lote configurável via MOLONI_FULL_SYNC_BATCH (default 50).
