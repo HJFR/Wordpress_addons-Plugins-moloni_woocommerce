@@ -38,6 +38,7 @@ try {
 
 <form method='POST' action='<?= esc_url(admin_url('admin.php?page=moloni&tab=settings')) ?>' id='formOpcoes'>
     <input type='hidden' value='save' name='action'>
+    <?php wp_nonce_field('moloni_save_settings', 'moloni_settings_nonce'); ?>
     <div>
         <!-- Documento -->
         <h2 class="title">
@@ -970,7 +971,62 @@ try {
                            style="width: 100px;"
                     />
                     <p class='description'>
-                        <?php esc_html_e('Multiplicador aplicado ao preço de custo para calcular o preço mínimo de venda (ex: 1.30 = 30% de margem). Se o preço de venda for inferior ao mínimo calculado (custo × margem × IVA), será ajustado automaticamente.') ?>
+                        <?php esc_html_e('Multiplicador aplicado ao preço de custo para calcular o preço mínimo de venda (ex: 1.30 = 30% de margem). Usado como base/fallback quando não há desconto de fornecedor ou nenhum escalão abaixo encaixa. Se o preço de venda for inferior ao mínimo calculado (custo × margem × IVA), será ajustado automaticamente.') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label><?php esc_html_e('Margem por desconto do fornecedor (escalões)') ?></label>
+                </th>
+                <td>
+                    <p class='description' style="margin-top:0">
+                        <?php esc_html_e('Define escalões com base no % de desconto do preço de custo do fornecedor (comercial + financeiro, lido do Moloni). Para cada produto é aplicada a margem do escalão com o maior "desconto ≥" que o produto atinge; se nenhum encaixar, usa-se a margem base acima. Deixa as linhas a 0 para não usar escalões.') ?>
+                    </p>
+                    <table class="widefat" style="max-width:480px; margin-top:8px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left;"><?php esc_html_e('Desconto ≥ (%)') ?></th>
+                                <th style="text-align:left;"><?php esc_html_e('Margem (multiplicador)') ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php
+                        for ($tier = 1; $tier <= \Moloni\Helpers\MoloniProduct::MARGIN_TIER_SLOTS; $tier++) {
+                            $dConst = 'MOLONI_MARGIN_TIER_' . $tier . '_DISCOUNT';
+                            $mConst = 'MOLONI_MARGIN_TIER_' . $tier . '_MARGIN';
+
+                            $dVal = (defined($dConst) && (float)constant($dConst) > 0)
+                                ? number_format((float)constant($dConst), 2, '.', '')
+                                : '';
+                            $mVal = (defined($mConst) && (float)constant($mConst) >= 1.0)
+                                ? number_format((float)constant($mConst), 2, '.', '')
+                                : '';
+                            ?>
+                            <tr>
+                                <td>
+                                    <input type="number"
+                                           name="opt[moloni_margin_tier_<?= (int)$tier ?>_discount]"
+                                           value="<?= esc_attr($dVal) ?>"
+                                           step="0.01" min="0" max="100"
+                                           placeholder="0"
+                                           style="width: 110px;" />
+                                </td>
+                                <td>
+                                    <input type="number"
+                                           name="opt[moloni_margin_tier_<?= (int)$tier ?>_margin]"
+                                           value="<?= esc_attr($mVal) ?>"
+                                           step="0.01" min="1.00"
+                                           placeholder="1.30"
+                                           style="width: 110px;" />
+                                </td>
+                            </tr>
+                        <?php } ?>
+                        </tbody>
+                    </table>
+                    <p class='description'>
+                        <?php esc_html_e('Exemplo: "Desconto ≥ 20 → 1.45" significa que um produto cujo custo de fornecedor tem 20% ou mais de desconto passa a exigir 45% de margem mínima, aproveitando o custo mais baixo para capturar mais lucro.') ?>
                     </p>
                 </td>
             </tr>

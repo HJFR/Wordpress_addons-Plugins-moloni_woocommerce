@@ -213,12 +213,19 @@ class UpdateProductStock extends ImportService
 
         MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
 
-        // Enforce minimum sale price based on cost
+        // Supplier discount: the getModifiedSince payload is light and may omit
+        // the suppliers array — use it when present, otherwise fetch via getOne.
+        $discountInfo = !empty($this->moloniProduct['suppliers'])
+            ? MoloniProduct::extractSupplierDiscount($this->moloniProduct)
+            : MoloniProduct::fetchSupplierDiscount((int)$this->moloniProduct['product_id']);
+
+        // Enforce minimum sale price based on cost + the discount-based tier
         MoloniProduct::enforceMinimumPrice(
             $wcProduct,
             $costPrice,
             $this->moloniProduct['taxes'] ?? [],
-            $this->moloniProduct['reference'] ?? ''
+            $this->moloniProduct['reference'] ?? '',
+            $discountInfo
         );
 
         $wcProduct->save();

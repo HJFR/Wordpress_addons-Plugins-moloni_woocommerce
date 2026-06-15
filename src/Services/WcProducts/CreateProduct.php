@@ -215,11 +215,16 @@ class CreateProduct extends ImportService
             return;
         }
 
+        // The create flow already holds the full products/getOne payload, so the
+        // supplier discount can be read directly without another API call.
+        $discountInfo = MoloniProduct::extractSupplierDiscount($this->moloniProduct);
+
         MoloniProduct::enforceMinimumPrice(
             $this->wcProduct,
             $this->lastFetchedCostPrice,
             $this->moloniProduct['taxes'] ?? [],
-            $this->moloniProduct['reference'] ?? ''
+            $this->moloniProduct['reference'] ?? '',
+            $discountInfo
         );
     }
 

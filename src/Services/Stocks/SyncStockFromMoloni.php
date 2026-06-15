@@ -291,12 +291,19 @@ class SyncStockFromMoloni
 
         MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
 
-        // Enforce minimum sale price based on cost
+        // Supplier discount for the tier-based margin: use the suppliers array if
+        // this payload carries it, otherwise fetch it via getOne.
+        $discountInfo = !empty($product['suppliers'])
+            ? MoloniProduct::extractSupplierDiscount($product)
+            : MoloniProduct::fetchSupplierDiscount((int)$product['product_id']);
+
+        // Enforce minimum sale price based on cost + the discount-based tier
         MoloniProduct::enforceMinimumPrice(
             $wcProduct,
             $costPrice,
             $product['taxes'] ?? [],
-            $product['reference'] ?? ''
+            $product['reference'] ?? '',
+            $discountInfo
         );
 
         $wcProduct->save();

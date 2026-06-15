@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.1.01
+Stable tag: 5.2.0
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,11 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.2.0 =
+* NOVO: Margem mínima de venda por escalões consoante o desconto do preço de custo do fornecedor. O plugin lê do Moloni (products/getOne → suppliers) o custo bruto, os descontos comercial e financeiro e o custo líquido, calcula o % de desconto efetivo e aplica a margem do escalão correspondente (configurável em Definições). Sem escalões definidos, mantém exatamente a margem base anterior.
+* NOVO: O % de desconto do fornecedor é guardado no produto (meta _moloni_supplier_discount_pct) e registado nos logs, para trabalhar o lucro com base no desconto.
+* MINOR: Na criação de produto o desconto é lido do payload getOne já carregado (sem chamada extra); na sincronização de stock só faz getOne quando os fornecedores não vêm no payload.
+
 = 5.1.01 =
 * FIX: Preço de venda não era calculado a partir do custo quando o produto não tinha preço definido (mostrava 0€)
 * FIX: Sincronização de stock truncada agora preserva o watermark — produtos em excesso são processados no próximo ciclo

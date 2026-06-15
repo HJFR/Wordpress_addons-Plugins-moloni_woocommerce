@@ -157,8 +157,13 @@ class Start
      */
     private static function saveSettings(): void
     {
+        // CSRF protection: the settings form ships a nonce (wp_nonce_field). This
+        // matters because some options (base margin + discount tiers) drive the
+        // product price floor — a forged save could wipe those price protections.
+        check_admin_referer('moloni_save_settings', 'moloni_settings_nonce');
+
         add_settings_error('general', 'settings_updated', __('Alterações guardadas.'), 'updated');
-        $options = $_POST['opt'];
+        $options = (isset($_POST['opt']) && is_array($_POST['opt'])) ? wp_unslash($_POST['opt']) : [];
 
         foreach ($options as $option => $value) {
             $option = sanitize_text_field($option);
