@@ -18,6 +18,7 @@ use Moloni\Services\Documents\OpenDocument;
 use Moloni\Services\Orders\CreateMoloniDocument;
 use Moloni\Services\Orders\DiscardOrder;
 use Moloni\Services\Stocks\SyncStockFromMoloni;
+use Moloni\Services\Stocks\SyncStockByPriority;
 
 /**
  * Class Plugin
@@ -170,6 +171,9 @@ class Plugin
                         break;
                     case 'syncStocksFull':
                         $this->syncStocksFull();
+                        break;
+                    case 'syncStocksCancel':
+                        $this->syncStocksCancel();
                         break;
                     case 'remLogs':
                         $this->removeLogs();
@@ -477,12 +481,14 @@ class Plugin
     }
 
     /**
-     * Resumable FULL stock sync: walks the ENTIRE Moloni catalogue, not only the
-     * products modified in the last week. Each run is capped at
-     * MOLONI_SYNC_MAX_PRODUCTS (default 2000), so the progress offset is persisted
-     * between runs (option moloni_full_sync_offset) and repeated clicks advance
-     * through the catalogue instead of re-processing the first batch. When a run
-     * reaches the final page (not truncated) the progress is cleared = complete.
+     * Resumable FULL stock sync in PRIORITY order: walks the ENTIRE WooCommerce
+     * catalogue (not only products modified in the last week), processing the
+     * highest price-risk products first — phase 1: published + in stock, phase 2:
+     * not published + in stock, phase 3: published + out of stock, phase 4: not
+     * published + out of stock. Progress (phase + page) is persisted between cron
+     * ticks (option moloni_full_sync_state); each tick handles one small page so a
+     * large catalogue completes unattended within the 60 req/min API limit. It can
+     * be cancelled at any time from Tools (syncStocksCancel).
      *
      * @return void
      */
@@ -493,14 +499,12 @@ class Plugin
         // ARM-ONLY: do not run a heavy batch inside this HTTP request (it could
         // exceed the PHP timeout and the API rate limit). We just mark the full
         // sync as armed; the 5-minute cron then processes it in background batches
-        // of 50 until the whole catalogue is covered. (Crons::productsSync.)
-        if (get_option('moloni_full_sync_offset', false) === false) {
-            add_option('moloni_full_sync_offset', 0, '', false);
-
+        // in priority order until the whole catalogue is covered. (Crons::productsSync.)
+        if (SyncStockByPriority::arm()) {
             add_settings_error(
                 'moloni',
                 'moloni-full-sync-armed',
-                __('Sincronização completa agendada — vai decorrer em segundo plano, em lotes de 50 a cada 5 minutos, até percorrer todo o catálogo. O progresso aparece aqui; não precisas de fazer mais nada.'),
+                __('Sincronização completa por prioridade agendada — vai decorrer em segundo plano, em lotes a cada 5 minutos. Começa pelos produtos com stock e publicados (maior risco de preço errado), depois com stock não publicados, depois publicados sem stock e por fim os restantes. Podes cancelá-la a qualquer momento aqui.'),
                 'updated'
             );
 
@@ -508,15 +512,56 @@ class Plugin
                 'action' => 'stock:sync:manual:full:armed',
             ]);
         } else {
+            $state = SyncStockByPriority::getState();
+            $phase = $state['phase'] ?? 1;
+            $label = SyncStockByPriority::PHASES[$phase]['label'] ?? '';
+
             add_settings_error(
                 'moloni',
                 'moloni-full-sync-running',
                 sprintf(
-                    __('Sincronização completa já em curso (posição %d) — continua em segundo plano a cada 5 minutos.'),
-                    (int) get_option('moloni_full_sync_offset', 0)
+                    __('Sincronização completa já em curso (fase %1$d/%2$d: %3$s) — continua em segundo plano a cada 5 minutos.'),
+                    (int) $phase,
+                    SyncStockByPriority::LAST_PHASE,
+                    $label
                 ),
                 'updated'
             );
         }
+    }
+
+    /**
+     * Cancel a running priority full sync. Sets a cancel flag that the cron checks
+     * at tick start AND mid-batch, so the remaining products are left untouched —
+     * useful when a misconfiguration is spotted after the first products synced.
+     *
+     * @return void
+     */
+    private function syncStocksCancel(): void
+    {
+        check_admin_referer('moloni_sync_stocks_cancel');
+
+        if (!SyncStockByPriority::isArmed()) {
+            add_settings_error(
+                'moloni',
+                'moloni-full-sync-cancel-none',
+                __('Não há nenhuma sincronização completa em curso para cancelar.')
+            );
+
+            return;
+        }
+
+        SyncStockByPriority::requestCancel();
+
+        add_settings_error(
+            'moloni',
+            'moloni-full-sync-cancelling',
+            __('Cancelamento pedido — a sincronização completa vai parar dentro do lote atual (no máximo alguns produtos a mais) e os restantes não serão alterados.'),
+            'updated'
+        );
+
+        Storage::$LOGGER->info(__('Cancelamento de sincronização completa pedido (manual)'), [
+            'action' => 'stock:sync:manual:full:cancel',
+        ]);
     }
 }

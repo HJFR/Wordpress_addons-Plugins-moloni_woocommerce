@@ -28,15 +28,31 @@ if (!defined('ABSPATH')) {
     <tr>
         <th class="p-8">
             <strong class="name">
-                <?php esc_html_e('Sincronização completa de stocks') ?>
+                <?php esc_html_e('Sincronização completa de stocks (por prioridade)') ?>
             </strong>
             <p class='description'>
-                <?php esc_html_e('Sincroniza stock e preço de custo de TODOS os produtos (não só os modificados na última semana). Processa em lotes de 50 para respeitar o limite da API Moloni (60 pedidos/min). Clica UMA vez para arrancar — a partir daí continua sozinho em segundo plano (a cada 5 min, via cron) até concluir.') ?>
+                <?php esc_html_e('Sincroniza stock e preço de custo de TODOS os produtos, por ordem de prioridade: primeiro os que têm stock e estão publicados (maior risco de preço errado face à última venda), depois com stock mas não publicados, depois publicados sem stock e por fim os restantes. Processa em lotes para respeitar o limite da API Moloni (60 pedidos/min). Clica UMA vez para arrancar — continua sozinho em segundo plano (a cada 5 min, via cron) até concluir.') ?>
                 <?php
-                $mnFullArmed  = (get_option('moloni_full_sync_offset', false) !== false);
-                $mnFullOffset = (int) get_option('moloni_full_sync_offset', 0);
+                $mnState         = \Moloni\Services\Stocks\SyncStockByPriority::getState();
+                $mnFullArmed     = ($mnState !== null);
+                $mnCancelPending = ($mnFullArmed && get_option(\Moloni\Services\Stocks\SyncStockByPriority::CANCEL_OPTION, false) !== false);
+
                 if ($mnFullArmed) {
-                    echo '<br/><strong>' . esc_html(sprintf(__('Em curso, em segundo plano — posição %d.'), $mnFullOffset)) . '</strong>';
+                    $mnPhase = (int) $mnState['phase'];
+                    $mnLabel = \Moloni\Services\Stocks\SyncStockByPriority::PHASES[$mnPhase]['label'] ?? '';
+                    $mnLast  = \Moloni\Services\Stocks\SyncStockByPriority::LAST_PHASE;
+
+                    if ($mnCancelPending) {
+                        echo '<br/><strong>' . esc_html__('A cancelar — vai parar no próximo lote.') . '</strong>';
+                    } else {
+                        echo '<br/><strong>' . esc_html(sprintf(
+                            __('Em curso, em segundo plano — fase %1$d/%2$d: %3$s (página %4$d).'),
+                            $mnPhase,
+                            $mnLast,
+                            $mnLabel,
+                            (int) $mnState['page']
+                        )) . '</strong>';
+                    }
                 }
                 ?>
             </p>
@@ -47,6 +63,14 @@ if (!defined('ABSPATH')) {
             >
                 <?php echo (!empty($mnFullArmed)) ? esc_html__('Sincronização completa (em curso)') : esc_html__('Iniciar sincronização completa'); ?>
             </a>
+            <?php if (!empty($mnFullArmed) && empty($mnCancelPending)) : ?>
+                <br/><br/>
+                <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncStocksCancel'), 'moloni_sync_stocks_cancel')) ?>'
+                   class="button button-large"
+                >
+                    <?php esc_html_e('Cancelar sincronização') ?>
+                </a>
+            <?php endif; ?>
         </td>
     </tr>
 

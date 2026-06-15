@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.2.3
+Stable tag: 5.3.0
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,12 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.3.0 =
+* NOVO: Sincronização completa POR PRIORIDADE. A "Sincronização completa" passa a percorrer o catálogo do WooCommerce por ordem de risco de preço errado (com base na última venda): 1.º produtos COM stock e PUBLICADOS, 2.º com stock mas não publicados, 3.º publicados sem stock e 4.º os restantes. Assim, os produtos comercialmente ativos e de maior risco são corrigidos primeiro. Continua a decorrer em segundo plano (cron a cada 5 min), em lotes, respeitando o limite da API Moloni (60 pedidos/min). Retomável entre lotes (estado guardado em fase + página).
+* NOVO: CANCELAR a sincronização completa a qualquer momento, a partir das Ferramentas. Útil quando se deteta um erro de configuração depois dos primeiros produtos: o cancelamento é verificado no início de cada lote E a cada poucos produtos dentro do lote (leitura direta à BD, à prova de cache), pelo que os produtos restantes não são alterados.
+* MINOR: Caminho único e partilhado de processamento por produto (stock + preço de custo + piso de preço) entre a sincronização recente e a completa, evitando duplicação de lógica sensível.
+* NOTA: A ordenação por prioridade usa o estado de stock do WooCommerce (instock/outofstock); a sincronização completa por prioridade obtém cada produto Moloni por referência (products/getByReference), pelo que faz ~1 chamada extra por produto — compensado pela correção prioritária dos artigos de maior risco e regulado pelo limitador de chamadas.
+
 = 5.2.3 =
 * MANUTENÇÃO: Autoria do plugin atribuída a HJFR (fork) — o plugin já diverge substancialmente do original. Licença GPL e copyright original mantidos para conformidade.
 

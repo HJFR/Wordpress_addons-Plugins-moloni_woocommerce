@@ -5,13 +5,11 @@ namespace Moloni\Services\Stocks;
 use Moloni\Curl;
 use Moloni\Storage;
 use Moloni\Exceptions\APIException;
-use Moloni\Exceptions\Stocks\StockLockedException;
-use Moloni\Exceptions\Stocks\StockMatchingException;
-use Moloni\Helpers\MoloniProduct;
-use Moloni\Services\WcProducts\UpdateProductStock;
 
 class SyncStockFromMoloni
 {
+    use ProcessesProductStock;
+
     /**
      * Default cap on products processed per cron tick. Tunable via the
      * MOLONI_SYNC_MAX_PRODUCTS constant (set in plugin settings / DB).
@@ -122,53 +120,20 @@ class SyncStockFromMoloni
                 continue;
             }
 
-            // UpdateProductStock::run() does its own cost-price sync on the
-            // refreshed product instance, so only fall back to syncCostPrice
-            // when stock processing did NOT execute (match / locked / error).
-            $costSyncHandledByStockService = false;
+            // Single, shared per-product path (stock + cost + price floor).
+            $result = $this->processProductStock($product, $wcProduct, $reference);
 
-            try {
-                $service = new UpdateProductStock($wcProduct, $product);
-
-                do_action('moloni_before_product_stock_sync', $service);
-
-                $service->run();
-
-                $this->updated[$reference] = $service->getResultMessage();
-                $costSyncHandledByStockService = true;
-            } catch (StockMatchingException $error) {
-                $this->equal[$reference] = $error->getMessage();
-            } catch (StockLockedException $error) {
-                $this->locked[$reference] = $error->getMessage();
-            } catch (\Exception $error) {
-                // Any other failure (API error, WooCommerce internal, etc.) must
-                // NOT abort the whole batch — log this product and move on so the
-                // remaining products in the run still sync.
-                Storage::$LOGGER->error(__('Erro ao sincronizar stock do produto'), [
-                    'tag' => 'stock:sync:service:product:error',
-                    'reference' => $reference,
-                    'message' => $error->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            if (!$costSyncHandledByStockService) {
-                try {
-                    // Reload to avoid acting on a stale object — the stock service
-                    // may have already persisted unrelated changes.
-                    $freshProduct = wc_get_product($wcProductId);
-
-                    if ($freshProduct) {
-                        $this->syncCostPrice($product, $freshProduct);
-                    }
-                } catch (\Exception $error) {
-                    Storage::$LOGGER->error(__('Erro ao sincronizar preço de custo do produto'), [
-                        'tag' => 'stock:sync:service:costprice:error',
-                        'reference' => $reference,
-                        'message' => $error->getMessage(),
-                    ]);
-                }
+            switch ($result['outcome']) {
+                case 'updated':
+                    $this->updated[$reference] = $result['message'];
+                    break;
+                case 'equal':
+                    $this->equal[$reference] = $result['message'];
+                    break;
+                case 'locked':
+                    $this->locked[$reference] = $result['message'];
+                    break;
+                // 'error' was already logged inside processProductStock()
             }
 
             // Throttle per-product to keep aggregate API rate well under the
@@ -304,56 +269,6 @@ class SyncStockFromMoloni
     public function getLocked(): array
     {
         return $this->locked;
-    }
-
-    //            Cost Price            //
-
-    /**
-     * Sync cost price from Moloni to WooCommerce and enforce minimum sale price
-     *
-     * @param array $product Moloni product data (includes taxes array)
-     * @param \WC_Product $wcProduct WooCommerce product
-     */
-    private function syncCostPrice(array $product, $wcProduct): void
-    {
-        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
-            return;
-        }
-
-        if (empty($product['product_id'])) {
-            return;
-        }
-
-        $costPrice = MoloniProduct::fetchCostPrice((int)$product['product_id']);
-
-        if ($costPrice === null) {
-            return;
-        }
-
-        MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
-
-        // Supplier discount for the tier-based margin: use the suppliers array if
-        // this payload carries it, else fetch via getOne — but ONLY when tiers are
-        // configured (otherwise the discount can't change the margin and the extra
-        // API call is wasted against the 60 req/min limit).
-        if (!empty($product['suppliers'])) {
-            $discountInfo = MoloniProduct::extractSupplierDiscount($product);
-        } elseif (MoloniProduct::hasMarginTiers()) {
-            $discountInfo = MoloniProduct::fetchSupplierDiscount((int)$product['product_id']);
-        } else {
-            $discountInfo = [];
-        }
-
-        // Enforce minimum sale price based on cost + the discount-based tier
-        MoloniProduct::enforceMinimumPrice(
-            $wcProduct,
-            $costPrice,
-            $product['taxes'] ?? [],
-            $product['reference'] ?? '',
-            $discountInfo
-        );
-
-        $wcProduct->save();
     }
 
     //            Auxiliary            //
