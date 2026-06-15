@@ -43,7 +43,7 @@ class SyncStockFromMoloni
     private $notFound = [];
     private $locked = [];
 
-    public function __construct($since, $offset = 0)
+    public function __construct($since, $offset = 0, $limitOverride = 0)
     {
         if (is_numeric($since)) {
             $sinceTime = $since;
@@ -65,6 +65,11 @@ class SyncStockFromMoloni
         $this->limit = self::DEFAULT_MAX_PRODUCTS;
         if (defined('MOLONI_SYNC_MAX_PRODUCTS') && (int)MOLONI_SYNC_MAX_PRODUCTS > 0) {
             $this->limit = (int)MOLONI_SYNC_MAX_PRODUCTS;
+        }
+        // Per-run cap override (used by the resumable full sync to process a small
+        // batch each run — e.g. 50 — so it fits under the API limit + PHP timeout).
+        if ((int)$limitOverride > 0) {
+            $this->limit = (int)$limitOverride;
         }
 
         $this->throttleUs = self::DEFAULT_THROTTLE_US;
@@ -328,10 +333,16 @@ class SyncStockFromMoloni
         MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
 
         // Supplier discount for the tier-based margin: use the suppliers array if
-        // this payload carries it, otherwise fetch it via getOne.
-        $discountInfo = !empty($product['suppliers'])
-            ? MoloniProduct::extractSupplierDiscount($product)
-            : MoloniProduct::fetchSupplierDiscount((int)$product['product_id']);
+        // this payload carries it, else fetch via getOne — but ONLY when tiers are
+        // configured (otherwise the discount can't change the margin and the extra
+        // API call is wasted against the 60 req/min limit).
+        if (!empty($product['suppliers'])) {
+            $discountInfo = MoloniProduct::extractSupplierDiscount($product);
+        } elseif (MoloniProduct::hasMarginTiers()) {
+            $discountInfo = MoloniProduct::fetchSupplierDiscount((int)$product['product_id']);
+        } else {
+            $discountInfo = [];
+        }
 
         // Enforce minimum sale price based on cost + the discount-based tier
         MoloniProduct::enforceMinimumPrice(

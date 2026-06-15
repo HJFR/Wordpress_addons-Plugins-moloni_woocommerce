@@ -31,11 +31,12 @@ if (!defined('ABSPATH')) {
                 <?php esc_html_e('Sincronização completa de stocks') ?>
             </strong>
             <p class='description'>
-                <?php esc_html_e('Sincroniza stock e preço de custo de TODOS os produtos (não só os modificados na última semana). Cada execução processa até 2000 artigos e retoma de onde parou — para catálogos grandes, clica de novo até aparecer "concluída".') ?>
+                <?php esc_html_e('Sincroniza stock e preço de custo de TODOS os produtos (não só os modificados na última semana). Processa em lotes de 50 para respeitar o limite da API Moloni (60 pedidos/min). Clica UMA vez para arrancar — a partir daí continua sozinho em segundo plano (a cada 5 min, via cron) até concluir.') ?>
                 <?php
+                $mnFullArmed  = (get_option('moloni_full_sync_offset', false) !== false);
                 $mnFullOffset = (int) get_option('moloni_full_sync_offset', 0);
-                if ($mnFullOffset > 0) {
-                    echo '<br/><strong>' . esc_html(sprintf(__('Em curso — retoma na posição %d.'), $mnFullOffset)) . '</strong>';
+                if ($mnFullArmed) {
+                    echo '<br/><strong>' . esc_html(sprintf(__('Em curso, em segundo plano — posição %d.'), $mnFullOffset)) . '</strong>';
                 }
                 ?>
             </p>
@@ -44,7 +45,7 @@ if (!defined('ABSPATH')) {
             <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncStocksFull'), 'moloni_sync_stocks_full')) ?>'
                class="button button-large"
             >
-                <?php echo (isset($mnFullOffset) && $mnFullOffset > 0) ? esc_html__('Continuar sincronização completa') : esc_html__('Sincronização completa'); ?>
+                <?php echo (!empty($mnFullArmed)) ? esc_html__('Sincronização completa (em curso)') : esc_html__('Iniciar sincronização completa'); ?>
             </a>
         </td>
     </tr>

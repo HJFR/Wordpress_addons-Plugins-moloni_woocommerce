@@ -17,6 +17,9 @@ class Curl
     /** @var array Hold the request log */
     private static $logs = [];
 
+    /** @var float[] Unix timestamps of recent API calls, for the rate limiter */
+    private static $callTimestamps = [];
+
     /**
      * Hold a list of methods that can be cached
      * @var array
@@ -70,6 +73,13 @@ class Curl
 
         $url = 'https://api.moloni.pt/v2/' . $action . '/?human_errors=true&access_token=' . Storage::$MOLONI_ACCESS_TOKEN;
 
+        // Proactively stay under Moloni's API quota (60 requests/minute per key)
+        // so we never hit 429. Only on the first attempt — a 429 retry already
+        // waits via sleep() below, and must not double-count toward the window.
+        if ((int)$retry === 0) {
+            self::throttleRateLimit();
+        }
+
         $response = wp_remote_post($url, [
             'body' => http_build_query($values),
             'timeout' => 45
@@ -122,6 +132,56 @@ class Curl
         }
 
         throw new APIException(__('Ups, foi encontrado um erro...'), $log);
+    }
+
+    /**
+     * Client-side rate limiter — keeps API usage under Moloni's documented quota
+     * of 60 requests per minute per API key (else HTTP 429). Rolling 60-second
+     * window: allows fast bursts while under the cap (so single operations like
+     * issuing one document stay snappy) and only sleeps when a sustained run
+     * (e.g. the bulk stock sync) would exceed it. In-process (static) — covers
+     * the dominant case of one long-running sync request.
+     *
+     * Configurable via MOLONI_API_MAX_PER_MIN (default 60). A small safety
+     * margin is subtracted to stay clear of the hard limit.
+     *
+     * @return void
+     */
+    private static function throttleRateLimit(): void
+    {
+        $maxPerMin = 60;
+        if (defined('MOLONI_API_MAX_PER_MIN') && (int)MOLONI_API_MAX_PER_MIN > 0) {
+            $maxPerMin = (int)MOLONI_API_MAX_PER_MIN;
+        }
+        $maxPerMin = max(1, $maxPerMin - 2); // safety margin below the hard cap
+
+        $now = microtime(true);
+
+        // Drop timestamps older than the 60s window.
+        self::$callTimestamps = array_values(array_filter(
+            self::$callTimestamps,
+            static function ($t) use ($now) {
+                return ($now - $t) < 60.0;
+            }
+        ));
+
+        if (count(self::$callTimestamps) >= $maxPerMin) {
+            $wait = 60.0 - ($now - self::$callTimestamps[0]) + 0.05;
+
+            if ($wait > 0) {
+                usleep((int)ceil($wait * 1000000));
+            }
+
+            $now = microtime(true);
+            self::$callTimestamps = array_values(array_filter(
+                self::$callTimestamps,
+                static function ($t) use ($now) {
+                    return ($now - $t) < 60.0;
+                }
+            ));
+        }
+
+        self::$callTimestamps[] = microtime(true);
     }
 
     /**

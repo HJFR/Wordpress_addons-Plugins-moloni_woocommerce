@@ -42,6 +42,49 @@ class Crons
             }
 
             if (defined('MOLONI_STOCK_SYNC') && (int)MOLONI_STOCK_SYNC !== 0) {
+                // If a FULL sync is armed (started from Tools), continue it this
+                // tick instead of the recent-window sync: process one small batch
+                // and advance the persisted offset until the whole catalogue is
+                // covered. Runs every 5 min, so a large catalogue completes
+                // unattended without exceeding the 60 req/min API limit.
+                $fullOffset = get_option('moloni_full_sync_offset', false);
+
+                if ($fullOffset !== false) {
+                    // The rate limiter may sleep to honour 60 req/min; lift the
+                    // timeout so a batch always finishes within the cron tick.
+                    if (function_exists('wc_set_time_limit')) {
+                        wc_set_time_limit(0);
+                    }
+
+                    $batch = 50;
+                    if (defined('MOLONI_FULL_SYNC_BATCH') && (int)MOLONI_FULL_SYNC_BATCH > 0) {
+                        $batch = (int)MOLONI_FULL_SYNC_BATCH;
+                    }
+
+                    $service = new SyncStockFromMoloni('2000-01-01', (int)$fullOffset, $batch);
+                    $service->run();
+
+                    if ($service->wasTruncated()) {
+                        update_option('moloni_full_sync_offset', $service->getNextOffset(), false);
+                    } else {
+                        // Whole catalogue covered — finish and align the recent-sync
+                        // watermark to now so it does not re-process the sweep window.
+                        delete_option('moloni_full_sync_offset');
+                        Model::setOption('moloni_stock_sync_time', $runningAt);
+                    }
+
+                    Storage::$LOGGER->info(__('Sincronização completa (cron, em lote)'), [
+                        'action' => 'stock:sync:cron:full',
+                        'start_offset' => (int)$fullOffset,
+                        'next_offset' => $service->getNextOffset(),
+                        'truncated' => $service->wasTruncated(),
+                        'found' => $service->countFoundRecord(),
+                        'updated' => $service->getUpdated(),
+                    ]);
+
+                    return true;
+                }
+
                 if (!defined('MOLONI_STOCK_SYNC_TIME')) {
                     define('MOLONI_STOCK_SYNC_TIME', (time() - 600));
 

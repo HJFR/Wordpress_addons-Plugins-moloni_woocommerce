@@ -408,6 +408,12 @@ class Plugin
     {
         check_admin_referer('moloni_sync_stocks');
 
+        // The rate limiter (60 req/min) can pace this run; lift the PHP timeout
+        // so a larger 7-day window does not abort mid-sync.
+        if (function_exists('wc_set_time_limit')) {
+            wc_set_time_limit(0);
+        }
+
         // Get the 'since' date parameter, default to 1 week ago
         $date = isset($_GET['since']) ? sanitize_text_field($_GET['since']) : gmdate('Y-m-d', strtotime('-1 week'));
 
@@ -484,55 +490,33 @@ class Plugin
     {
         check_admin_referer('moloni_sync_stocks_full');
 
-        $since  = '2000-01-01'; // far past → getModifiedSince returns the whole catalogue
-        $offset = (int) get_option('moloni_full_sync_offset', 0);
+        // ARM-ONLY: do not run a heavy batch inside this HTTP request (it could
+        // exceed the PHP timeout and the API rate limit). We just mark the full
+        // sync as armed; the 5-minute cron then processes it in background batches
+        // of 50 until the whole catalogue is covered. (Crons::productsSync.)
+        if (get_option('moloni_full_sync_offset', false) === false) {
+            add_option('moloni_full_sync_offset', 0, '', false);
 
-        try {
-            $service = new SyncStockFromMoloni($since, $offset);
-            $service->run();
+            add_settings_error(
+                'moloni',
+                'moloni-full-sync-armed',
+                __('Sincronização completa agendada — vai decorrer em segundo plano, em lotes de 50 a cada 5 minutos, até percorrer todo o catálogo. O progresso aparece aqui; não precisas de fazer mais nada.'),
+                'updated'
+            );
 
-            $processedNow = $service->countFoundRecord();
-
-            if ($service->wasTruncated()) {
-                update_option('moloni_full_sync_offset', $service->getNextOffset(), false);
-
-                $message = sprintf(
-                    __('Sincronização completa em curso: processados %1$d artigos (posição %2$d). Clica novamente em "Sincronização completa" para continuar.'),
-                    $processedNow,
-                    $service->getNextOffset()
-                );
-                add_settings_error('moloni', 'moloni-full-sync-progress', $message, 'updated');
-            } else {
-                delete_option('moloni_full_sync_offset');
-
-                add_settings_error('moloni', 'moloni-full-sync-done', __('Sincronização completa concluída — todo o catálogo foi percorrido.'), 'updated');
-            }
-
-            if ($service->countUpdated() > 0) {
-                add_settings_error('moloni', 'moloni-full-sync-updated', sprintf(__('Foram atualizados %d artigos.'), $service->countUpdated()), 'updated');
-            }
-            if ($service->countNotFound() > 0) {
-                add_settings_error('moloni', 'moloni-full-sync-not-found', sprintf(__('Não foram encontrados no WooCommerce %d artigos.'), $service->countNotFound()));
-            }
-
-            if ($processedNow > 0) {
-                Storage::$LOGGER->info(__('Sincronização de stock completa (manual)'), [
-                    'action' => 'stock:sync:manual:full',
-                    'since' => $service->getSince(),
-                    'start_offset' => $offset,
-                    'next_offset' => $service->getNextOffset(),
-                    'truncated' => $service->wasTruncated(),
-                    'found' => $processedNow,
-                    'updated' => $service->getUpdated(),
-                ]);
-            }
-        } catch (Exception $ex) {
-            add_settings_error('moloni', 'moloni-full-sync-error', __('Erro fatal'));
-
-            Storage::$LOGGER->critical(__('Erro fatal'), [
-                'action' => 'stock:sync:manual:full:error',
-                'exception' => $ex->getMessage(),
+            Storage::$LOGGER->info(__('Sincronização completa agendada (manual)'), [
+                'action' => 'stock:sync:manual:full:armed',
             ]);
+        } else {
+            add_settings_error(
+                'moloni',
+                'moloni-full-sync-running',
+                sprintf(
+                    __('Sincronização completa já em curso (posição %d) — continua em segundo plano a cada 5 minutos.'),
+                    (int) get_option('moloni_full_sync_offset', 0)
+                ),
+                'updated'
+            );
         }
     }
 }

@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.2.1
+Stable tag: 5.2.2
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,12 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.2.2 =
+* NOVO: Limitador de chamadas à API do lado do cliente — respeita o limite do Moloni de 60 pedidos/minuto por chave (janela deslizante de 60s), evitando proativamente o HTTP 429. Configurável via MOLONI_API_MAX_PER_MIN. O retry de 429 mantém-se como rede de segurança.
+* NOVO: A "Sincronização completa" agora continua SOZINHA em segundo plano — basta clicar uma vez; o cron (a cada 5 min) processa lotes de 50 até concluir todo o catálogo, sem exceder o limite da API nem o timeout do PHP. Lote configurável via MOLONI_FULL_SYNC_BATCH (default 50).
+* MINOR: Menos chamadas à API — o desconto de fornecedor (products/getOne) só é obtido quando existem escalões de margem configurados; caso contrário é ignorado (não afeta a margem base).
+* NOTA: O getModifiedSince não devolve preço de custo nem fornecedores (qty máx 50/página), por isso cada produto exige chamadas extra — o limitador + lotes garantem que uma sincronização completa de catálogos grandes decorre dentro dos limites.
+
 = 5.2.1 =
 * NOVO: Piso de preço também no GUARDAR MANUAL do produto (woocommerce_admin_process_product_object). Se o preço definido à mão ficar abaixo do mínimo (custo × margem do escalão × IVA), é corrigido na hora, usando o custo (COGS) e o desconto já guardados no produto, sem chamada à API. Respeita a definição de sincronização de preço de custo.
 * NOVO: "Sincronização completa" nas Ferramentas — percorre TODOS os produtos (não só os modificados na última semana), retomável: cada execução processa até 2000 e guarda a posição (offset); clica de novo até concluir. Resolve a limitação em que sincronizações de >2000 produtos repetiam sempre os primeiros 2000.

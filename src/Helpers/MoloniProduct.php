@@ -308,6 +308,29 @@ class MoloniProduct
     }
 
     /**
+     * Whether any discount→margin tier is configured. When none are, the
+     * supplier discount never changes the margin, so fetching it (an extra
+     * products/getOne API call per product during sync) is pointless and the
+     * caller should skip it — important under Moloni's 60 req/min API limit.
+     *
+     * @return bool
+     */
+    public static function hasMarginTiers(): bool
+    {
+        for ($i = 1; $i <= self::MARGIN_TIER_SLOTS; $i++) {
+            $dConst = 'MOLONI_MARGIN_TIER_' . $i . '_DISCOUNT';
+            $mConst = 'MOLONI_MARGIN_TIER_' . $i . '_MARGIN';
+
+            if (defined($dConst) && defined($mConst)
+                && (float)constant($dConst) > 0 && (float)constant($mConst) >= 1.0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Calculate the minimum sale price based on cost price, margin and VAT.
      *
      * The margin is selected from the configurable discount tiers via
