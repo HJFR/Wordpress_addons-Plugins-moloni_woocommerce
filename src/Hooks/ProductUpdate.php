@@ -12,6 +12,7 @@ use Moloni\Notice;
 use Moloni\Plugin;
 use Moloni\Start;
 use Moloni\Helpers\SyncLogs;
+use Moloni\Helpers\MoloniProduct;
 use Moloni\Enums\SyncLogsType;
 use Moloni\Controllers\Product;
 
@@ -34,6 +35,37 @@ class ProductUpdate
         $this->parent = $parent;
         add_action('woocommerce_update_product', [$this, 'productCreateUpdate']);
         add_action('woocommerce_update_product_variation', [$this, 'productCreateUpdate']);
+        // Enforce the minimum-sale-price floor when a product is saved manually
+        // in the WooCommerce admin. Fires before WC persists the object, so the
+        // price correction is included in the same save (no extra write). Uses
+        // the cost + supplier discount already stored on the product (no API).
+        add_action('woocommerce_admin_process_product_object', [$this, 'enforcePriceFloorOnManualSave']);
+    }
+
+    /**
+     * Lower-bound the regular price to cost × margin (tier) × VAT on a manual
+     * admin save. No-op when there is no stored cost or the price already clears
+     * the floor. Variations are handled by WooCommerce separately and skipped.
+     *
+     * @param mixed $product WC_Product passed by the hook
+     *
+     * @return void
+     */
+    public function enforcePriceFloorOnManualSave($product): void
+    {
+        if (!($product instanceof WC_Product)) {
+            return;
+        }
+
+        try {
+            MoloniProduct::enforceMinimumPriceFromProduct($product);
+        } catch (Exception $ex) {
+            Storage::$LOGGER->warning(__('Erro ao aplicar o preço mínimo no guardar manual do produto'), [
+                'tag' => 'hook:productupdate:pricefloor',
+                'wc_id' => method_exists($product, 'get_id') ? $product->get_id() : 0,
+                'message' => $ex->getMessage(),
+            ]);
+        }
     }
 
     /**

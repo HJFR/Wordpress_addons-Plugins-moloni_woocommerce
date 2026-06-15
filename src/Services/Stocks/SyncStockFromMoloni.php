@@ -43,7 +43,7 @@ class SyncStockFromMoloni
     private $notFound = [];
     private $locked = [];
 
-    public function __construct($since)
+    public function __construct($since, $offset = 0)
     {
         if (is_numeric($since)) {
             $sinceTime = $since;
@@ -56,6 +56,11 @@ class SyncStockFromMoloni
         }
 
         $this->since = gmdate('Y-m-d H:i:s', $sinceTime);
+
+        // Starting offset — lets a bulk/full sync resume across runs (the offset
+        // is persisted by the caller between clicks/ticks). Default 0 keeps the
+        // normal cron / 7-day manual sync behaviour unchanged.
+        $this->offset = max(0, (int)$offset);
 
         $this->limit = self::DEFAULT_MAX_PRODUCTS;
         if (defined('MOLONI_SYNC_MAX_PRODUCTS') && (int)MOLONI_SYNC_MAX_PRODUCTS > 0) {
@@ -130,15 +135,34 @@ class SyncStockFromMoloni
                 $this->equal[$reference] = $error->getMessage();
             } catch (StockLockedException $error) {
                 $this->locked[$reference] = $error->getMessage();
+            } catch (\Exception $error) {
+                // Any other failure (API error, WooCommerce internal, etc.) must
+                // NOT abort the whole batch — log this product and move on so the
+                // remaining products in the run still sync.
+                Storage::$LOGGER->error(__('Erro ao sincronizar stock do produto'), [
+                    'tag' => 'stock:sync:service:product:error',
+                    'reference' => $reference,
+                    'message' => $error->getMessage(),
+                ]);
+
+                continue;
             }
 
             if (!$costSyncHandledByStockService) {
-                // Reload to avoid acting on a stale object — the stock service
-                // may have already persisted unrelated changes.
-                $freshProduct = wc_get_product($wcProductId);
+                try {
+                    // Reload to avoid acting on a stale object — the stock service
+                    // may have already persisted unrelated changes.
+                    $freshProduct = wc_get_product($wcProductId);
 
-                if ($freshProduct) {
-                    $this->syncCostPrice($product, $freshProduct);
+                    if ($freshProduct) {
+                        $this->syncCostPrice($product, $freshProduct);
+                    }
+                } catch (\Exception $error) {
+                    Storage::$LOGGER->error(__('Erro ao sincronizar preço de custo do produto'), [
+                        'tag' => 'stock:sync:service:costprice:error',
+                        'reference' => $reference,
+                        'message' => $error->getMessage(),
+                    ]);
                 }
             }
 
@@ -223,6 +247,18 @@ class SyncStockFromMoloni
     public function getSince()
     {
         return $this->since ?? '';
+    }
+
+    /**
+     * Offset to resume from on the next run. After a truncated run this is where
+     * the next batch should start; a full/bulk sync persists it between runs so
+     * it walks the whole catalogue instead of re-processing the first batch.
+     *
+     * @return int
+     */
+    public function getNextOffset(): int
+    {
+        return (int)$this->offset;
     }
 
     /**

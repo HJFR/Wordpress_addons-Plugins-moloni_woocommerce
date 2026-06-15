@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.2.0
+Stable tag: 5.2.1
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,12 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.2.1 =
+* NOVO: Piso de preço também no GUARDAR MANUAL do produto (woocommerce_admin_process_product_object). Se o preço definido à mão ficar abaixo do mínimo (custo × margem do escalão × IVA), é corrigido na hora, usando o custo (COGS) e o desconto já guardados no produto, sem chamada à API. Respeita a definição de sincronização de preço de custo.
+* NOVO: "Sincronização completa" nas Ferramentas — percorre TODOS os produtos (não só os modificados na última semana), retomável: cada execução processa até 2000 e guarda a posição (offset); clica de novo até concluir. Resolve a limitação em que sincronizações de >2000 produtos repetiam sempre os primeiros 2000.
+* FIX: Robustez do sync em massa — um erro num produto (API/WooCommerce) já não aborta o lote inteiro; o produto falhado é registado e o sync continua.
+* SEGURANÇA: Adicionado nonce (CSRF) às ações de sincronização de stock no admin.
+
 = 5.2.0 =
 * NOVO: Margem mínima de venda por escalões consoante o desconto do preço de custo do fornecedor. O plugin lê do Moloni (products/getOne → suppliers) o custo bruto, os descontos comercial e financeiro e o custo líquido, calcula o % de desconto efetivo e aplica a margem do escalão correspondente (configurável em Definições). Sem escalões definidos, mantém exatamente a margem base anterior.
 * NOVO: O % de desconto do fornecedor é guardado no produto (meta _moloni_supplier_discount_pct) e registado nos logs, para trabalhar o lucro com base no desconto.

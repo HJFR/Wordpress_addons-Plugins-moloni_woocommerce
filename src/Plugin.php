@@ -168,6 +168,9 @@ class Plugin
                     case 'syncStocks':
                         $this->syncStocks();
                         break;
+                    case 'syncStocksFull':
+                        $this->syncStocksFull();
+                        break;
                     case 'remLogs':
                         $this->removeLogs();
                         break;
@@ -403,6 +406,8 @@ class Plugin
      */
     private function syncStocks(): void
     {
+        check_admin_referer('moloni_sync_stocks');
+
         // Get the 'since' date parameter, default to 1 week ago
         $date = isset($_GET['since']) ? sanitize_text_field($_GET['since']) : gmdate('Y-m-d', strtotime('-1 week'));
 
@@ -461,6 +466,72 @@ class Plugin
             Storage::$LOGGER->critical($message, [
                 'action' => 'stock:sync:manual:error',
                 'exception' => $ex->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * Resumable FULL stock sync: walks the ENTIRE Moloni catalogue, not only the
+     * products modified in the last week. Each run is capped at
+     * MOLONI_SYNC_MAX_PRODUCTS (default 2000), so the progress offset is persisted
+     * between runs (option moloni_full_sync_offset) and repeated clicks advance
+     * through the catalogue instead of re-processing the first batch. When a run
+     * reaches the final page (not truncated) the progress is cleared = complete.
+     *
+     * @return void
+     */
+    private function syncStocksFull(): void
+    {
+        check_admin_referer('moloni_sync_stocks_full');
+
+        $since  = '2000-01-01'; // far past → getModifiedSince returns the whole catalogue
+        $offset = (int) get_option('moloni_full_sync_offset', 0);
+
+        try {
+            $service = new SyncStockFromMoloni($since, $offset);
+            $service->run();
+
+            $processedNow = $service->countFoundRecord();
+
+            if ($service->wasTruncated()) {
+                update_option('moloni_full_sync_offset', $service->getNextOffset(), false);
+
+                $message = sprintf(
+                    __('Sincronização completa em curso: processados %1$d artigos (posição %2$d). Clica novamente em "Sincronização completa" para continuar.'),
+                    $processedNow,
+                    $service->getNextOffset()
+                );
+                add_settings_error('moloni', 'moloni-full-sync-progress', $message, 'updated');
+            } else {
+                delete_option('moloni_full_sync_offset');
+
+                add_settings_error('moloni', 'moloni-full-sync-done', __('Sincronização completa concluída — todo o catálogo foi percorrido.'), 'updated');
+            }
+
+            if ($service->countUpdated() > 0) {
+                add_settings_error('moloni', 'moloni-full-sync-updated', sprintf(__('Foram atualizados %d artigos.'), $service->countUpdated()), 'updated');
+            }
+            if ($service->countNotFound() > 0) {
+                add_settings_error('moloni', 'moloni-full-sync-not-found', sprintf(__('Não foram encontrados no WooCommerce %d artigos.'), $service->countNotFound()));
+            }
+
+            if ($processedNow > 0) {
+                Storage::$LOGGER->info(__('Sincronização de stock completa (manual)'), [
+                    'action' => 'stock:sync:manual:full',
+                    'since' => $service->getSince(),
+                    'start_offset' => $offset,
+                    'next_offset' => $service->getNextOffset(),
+                    'truncated' => $service->wasTruncated(),
+                    'found' => $processedNow,
+                    'updated' => $service->getUpdated(),
+                ]);
+            }
+        } catch (Exception $ex) {
+            add_settings_error('moloni', 'moloni-full-sync-error', __('Erro fatal'));
+
+            Storage::$LOGGER->critical(__('Erro fatal'), [
+                'action' => 'stock:sync:manual:full:error',
+                'exception' => $ex->getMessage(),
             ]);
         }
     }

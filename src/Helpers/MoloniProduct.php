@@ -393,9 +393,100 @@ class MoloniProduct
         // queryable (lets the operator work the profit based on the discount).
         $product->update_meta_data('_moloni_supplier_discount_pct', $discountPct);
 
-        $minimumPrice = self::calculateMinimumSalePrice($costPrice, $moloniTaxes, $discountPct);
+        $minimumPrice  = self::calculateMinimumSalePrice($costPrice, $moloniTaxes, $discountPct);
         $appliedMargin = self::resolveMargin($discountPct);
 
+        return self::applyPriceFloor($product, $minimumPrice, $reference, $costPrice, $discountPct, $appliedMargin);
+    }
+
+    /**
+     * Enforce the minimum price on a MANUAL WooCommerce admin save, using the
+     * cost price and supplier discount ALREADY stored on the product by previous
+     * Moloni syncs (no API call). VAT is applied via WooCommerce's own tax engine
+     * (the product's tax class) when prices are stored including tax. Returns
+     * false (no-op) when there is no known cost to enforce against.
+     *
+     * @param WC_Product $product
+     *
+     * @return bool True if the price was adjusted.
+     */
+    public static function enforceMinimumPriceFromProduct(WC_Product $product): bool
+    {
+        // Respect the cost-price sync toggle: if it's off, do not clamp manual
+        // prices from (possibly stale) stored cost.
+        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
+            return false;
+        }
+
+        if (method_exists($product, 'is_type') && $product->is_type('variable')) {
+            return false;
+        }
+
+        $costPrice = self::getStoredCostPrice($product);
+        if ($costPrice <= 0) {
+            return false;
+        }
+
+        $discountPct   = (float)$product->get_meta('_moloni_supplier_discount_pct');
+        $appliedMargin = self::resolveMargin($discountPct);
+        $minimumPrice  = $costPrice * $appliedMargin;
+
+        // Apply VAT consistently with the sync floor, sourced from WooCommerce's
+        // tax engine (no Moloni taxes array is available on a manual admin save).
+        if (function_exists('wc_prices_include_tax') && wc_prices_include_tax()) {
+            $minimumPrice = (float)wc_get_price_including_tax($product, ['qty' => 1, 'price' => $minimumPrice]);
+        }
+        $minimumPrice = round($minimumPrice, 2);
+
+        $reference = $product->get_sku() ?: ('#' . $product->get_id());
+
+        return self::applyPriceFloor($product, $minimumPrice, $reference, $costPrice, $discountPct, $appliedMargin);
+    }
+
+    /**
+     * Read the cost price stored on a WC product: native COGS if enabled, else
+     * the Moloni cost meta. Returns 0.0 when none is available.
+     *
+     * @param WC_Product $product
+     *
+     * @return float
+     */
+    private static function getStoredCostPrice(WC_Product $product): float
+    {
+        if (self::isWcCogsEnabled() && method_exists($product, 'get_cogs_value')) {
+            $value = $product->get_cogs_value();
+            if ($value !== null && $value !== '' && (float)$value > 0) {
+                return (float)$value;
+            }
+        }
+
+        $meta = $product->get_meta('_moloni_cost_price');
+
+        return ($meta !== '' && $meta !== null) ? (float)$meta : 0.0;
+    }
+
+    /**
+     * Shared price-floor application: initialise a missing price, or raise a
+     * price below $minimumPrice; never lowers an already-sufficient price. Logs +
+     * notices the change. Returns true if the price was changed.
+     *
+     * @param WC_Product $product
+     * @param float $minimumPrice  Pre-computed minimum (incl. VAT if applicable)
+     * @param string $reference    SKU/reference for logging
+     * @param float $costPrice     Cost price (log context)
+     * @param float $discountPct   Supplier discount % (log context)
+     * @param float $appliedMargin Margin multiplier applied (log context)
+     *
+     * @return bool
+     */
+    private static function applyPriceFloor(
+        WC_Product $product,
+        float $minimumPrice,
+        string $reference,
+        float $costPrice,
+        float $discountPct,
+        float $appliedMargin
+    ): bool {
         if ($minimumPrice <= 0) {
             return false;
         }
