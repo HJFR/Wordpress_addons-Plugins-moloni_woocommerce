@@ -4,6 +4,7 @@ namespace Moloni\Services\Stocks;
 
 use Moloni\Curl;
 use Moloni\Storage;
+use Moloni\Helpers\MoloniProduct;
 use Moloni\Exceptions\APIException;
 
 /**
@@ -65,6 +66,24 @@ class SyncStockByPriority
     public const MODE_FIELDS_WM = 'fields_wm';
 
     /**
+     * Sweep mode: PRICE RULES, Moloni → WooCommerce — for every Moloni product
+     * that EXISTS in WooCommerce, RECALCULATES the WooCommerce sale price from
+     * the plugin's pricing rules: supplier cost with discounts × the margin of
+     * the qualifying discount tier (× VAT when WC prices include tax) — and SETS
+     * it (up or down). Products without a Moloni cost are left untouched. Never
+     * touches stock, never creates products.
+     */
+    public const MODE_PRICES = 'prices';
+
+    /**
+     * Sweep mode: PRICE PUSH, WooCommerce → Moloni — for every WooCommerce
+     * product that EXISTS in Moloni, sets the Moloni sale price equal to the
+     * site's price (excluding tax — Moloni prices are ex-VAT), echoing every
+     * other Moloni field back unchanged. Never creates products in Moloni.
+     */
+    public const MODE_PRICES_WM = 'prices_wm';
+
+    /**
      * Priority phases. Each phase selects WooCommerce products by post status +
      * stock status. Lower phase number = processed first.
      */
@@ -104,6 +123,9 @@ class SyncStockByPriority
     private $notFound = [];
     private $locked = [];
     private $pricedOnly = 0;
+
+    /** @var int Products skipped for lack of data (e.g. no Moloni cost in prices mode) */
+    private $skipped = 0;
 
     public function __construct(int $phase, int $page = 1, int $batchOverride = 0, string $mode = self::MODE_STOCK)
     {
@@ -213,6 +235,18 @@ class SyncStockByPriority
                 continue;
             }
 
+            // PRICE PUSH WC→Moloni mode: make the Moloni sale price equal to the
+            // site's (ex-VAT) price; everything else echoed back unchanged.
+            if ($this->mode === self::MODE_PRICES_WM) {
+                $this->pushPriceToMoloni($wcProduct, $reference);
+
+                if ($this->throttleUs > 0) {
+                    usleep($this->throttleUs);
+                }
+
+                continue;
+            }
+
             try {
                 $mlProduct = Curl::simple('products/getByReference', [
                     'reference' => $reference,
@@ -237,6 +271,45 @@ class SyncStockByPriority
             }
 
             $mlProduct = $mlProduct[0];
+
+            // PRICES mode: recalculate the WooCommerce sale price from the
+            // pricing rules (cost with discounts × tier margin × VAT) and SET it.
+            if ($this->mode === self::MODE_PRICES) {
+                try {
+                    // Saves below fire woocommerce_update_product — suppress the
+                    // WC→Moloni push hook so a price recalc never pushes back.
+                    \Moloni\Helpers\SyncLogs::addTimeout(\Moloni\Enums\SyncLogsType::WC_PRODUCT, (int)$wcProduct->get_id());
+
+                    $fresh = wc_get_product($wcProduct->get_id());
+
+                    if ($fresh) {
+                        $outcome = MoloniProduct::applyRulePrice($mlProduct, $fresh);
+
+                        switch ($outcome) {
+                            case 'updated':
+                                $this->updated[$reference] = __('Preço recalculado pelas regras');
+                                break;
+                            case 'equal':
+                                $this->equal[$reference] = __('Preço já de acordo com as regras');
+                                break;
+                            default: // 'no_cost' / 'skipped'
+                                $this->skipped++;
+                        }
+                    }
+                } catch (\Exception $error) {
+                    Storage::$LOGGER->error(__('Erro ao recalcular o preço do produto'), [
+                        'tag' => 'prices:sync:priority:error',
+                        'reference' => $reference,
+                        'message' => $error->getMessage(),
+                    ]);
+                }
+
+                if ($this->throttleUs > 0) {
+                    usleep($this->throttleUs);
+                }
+
+                continue;
+            }
 
             // FIELDS mode: apply only the per-field syncs enabled in Settings
             // (EAN, IVA, custo + piso de preço) — never touch stock.
@@ -349,6 +422,46 @@ class SyncStockByPriority
     }
 
     /**
+     * Push the site's sale price to the matched Moloni product. Never throws —
+     * failures are logged so one bad product never aborts the batch.
+     *
+     * @param object $wcProduct WooCommerce product
+     * @param string $reference SKU/reference (match key + logging)
+     */
+    private function pushPriceToMoloni($wcProduct, string $reference): void
+    {
+        try {
+            // Suppress the woocommerce_update_product push hook for this product
+            // (defensive parity with the fields sweep — no full reverse updates).
+            \Moloni\Helpers\SyncLogs::addTimeout(\Moloni\Enums\SyncLogsType::WC_PRODUCT, (int)$wcProduct->get_id());
+
+            $controller = new \Moloni\Controllers\Product($wcProduct);
+
+            if (!$controller->loadByReference()) {
+                $this->notFound[$reference] = __('Produto não encontrado na conta Moloni');
+
+                return;
+            }
+
+            $outcome = $controller->pushPrice();
+
+            if ($outcome === 'updated') {
+                $this->updated[$reference] = __('Preço atualizado no Moloni');
+            } elseif ($outcome === 'equal') {
+                $this->equal[$reference] = __('Preço já igual no Moloni');
+            } else { // 'no_price' — WC price missing/zero, never zero a Moloni price
+                $this->skipped++;
+            }
+        } catch (\Exception $error) {
+            Storage::$LOGGER->error(__('Erro ao atualizar o preço no Moloni'), [
+                'tag' => 'prices:sync:priority:wm:error',
+                'reference' => $reference,
+                'message' => $error->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Whether the current phase has no more pages after this run.
      */
     public function isPhaseComplete(): bool
@@ -414,6 +527,11 @@ class SyncStockByPriority
         return $this->pricedOnly;
     }
 
+    public function countSkipped(): int
+    {
+        return $this->skipped;
+    }
+
     public function getUpdated(): array
     {
         return $this->updated;
@@ -469,7 +587,9 @@ class SyncStockByPriority
      */
     public static function normalizeMode(string $mode): string
     {
-        return in_array($mode, [self::MODE_FIELDS, self::MODE_FIELDS_WM], true) ? $mode : self::MODE_STOCK;
+        $known = [self::MODE_FIELDS, self::MODE_FIELDS_WM, self::MODE_PRICES, self::MODE_PRICES_WM];
+
+        return in_array($mode, $known, true) ? $mode : self::MODE_STOCK;
     }
 
     /**

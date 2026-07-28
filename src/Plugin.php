@@ -178,6 +178,12 @@ class Plugin
                     case 'syncFieldsToMoloni':
                         $this->syncFieldsToMoloni();
                         break;
+                    case 'syncPricesToWc':
+                        $this->syncPricesToWc();
+                        break;
+                    case 'syncPricesToMoloni':
+                        $this->syncPricesToMoloni();
+                        break;
                     case 'syncStocksCancel':
                         $this->syncStocksCancel();
                         break;
@@ -638,6 +644,63 @@ class Plugin
     }
 
     /**
+     * Arm the PRICE UPDATE sweep Moloni → WooCommerce: for every Moloni product
+     * that exists in WooCommerce, RECALCULATES the sale price from the pricing
+     * rules (supplier cost with discounts × tier margin × VAT) and SETS it — up
+     * or down. Products without a Moloni cost are left untouched. Background
+     * batches via the 5-min cron, cancellable.
+     *
+     * @return void
+     */
+    private function syncPricesToWc(): void
+    {
+        check_admin_referer('moloni_sync_prices_to_wc');
+
+        if (SyncStockByPriority::arm(SyncStockByPriority::MODE_PRICES)) {
+            add_settings_error(
+                'moloni',
+                'moloni-prices-sync-armed',
+                __('Atualização de preços Moloni → WooCommerce agendada — para cada produto que existe nas duas plataformas, o preço de venda vai ser RECALCULADO pelas regras (preço de custo c/ desconto × margem do escalão, mais IVA se os preços do site o incluem) e definido, para cima ou para baixo. Produtos sem custo no Moloni ficam inalterados. Decorre em segundo plano; podes cancelar aqui a qualquer momento.'),
+                'updated'
+            );
+
+            Storage::$LOGGER->info(__('Atualização de preços Moloni → WooCommerce agendada (manual)'), [
+                'action' => 'prices:sync:manual:mw:armed',
+            ]);
+        } else {
+            $this->noticeSweepAlreadyRunning();
+        }
+    }
+
+    /**
+     * Arm the PRICE PUSH sweep WooCommerce → Moloni: for every WooCommerce
+     * product that exists in Moloni, sets the Moloni sale price equal to the
+     * site's price (ex-VAT), echoing everything else back unchanged. Background
+     * batches via the 5-min cron, cancellable.
+     *
+     * @return void
+     */
+    private function syncPricesToMoloni(): void
+    {
+        check_admin_referer('moloni_sync_prices_to_moloni');
+
+        if (SyncStockByPriority::arm(SyncStockByPriority::MODE_PRICES_WM)) {
+            add_settings_error(
+                'moloni',
+                'moloni-prices-sync-wm-armed',
+                __('Igualação de preços WooCommerce → Moloni agendada — para cada produto que existe nas duas plataformas, o preço de venda do artigo Moloni vai ficar igual ao preço do site (sem IVA; o Moloni guarda preços sem imposto). Nada mais é alterado no artigo. Produtos sem preço no site ficam inalterados. Decorre em segundo plano; podes cancelar aqui a qualquer momento.'),
+                'updated'
+            );
+
+            Storage::$LOGGER->info(__('Igualação de preços WooCommerce → Moloni agendada (manual)'), [
+                'action' => 'prices:sync:manual:wm:armed',
+            ]);
+        } else {
+            $this->noticeSweepAlreadyRunning();
+        }
+    }
+
+    /**
      * Shared "a sweep is already running" notice, naming the running mode so the
      * user knows what to cancel first.
      *
@@ -652,6 +715,8 @@ class Plugin
             SyncStockByPriority::MODE_STOCK => __('sincronização completa de stocks'),
             SyncStockByPriority::MODE_FIELDS => __('sincronização de campos Moloni → WooCommerce'),
             SyncStockByPriority::MODE_FIELDS_WM => __('sincronização de campos WooCommerce → Moloni'),
+            SyncStockByPriority::MODE_PRICES => __('atualização de preços Moloni → WooCommerce'),
+            SyncStockByPriority::MODE_PRICES_WM => __('igualação de preços WooCommerce → Moloni'),
         ];
 
         add_settings_error(

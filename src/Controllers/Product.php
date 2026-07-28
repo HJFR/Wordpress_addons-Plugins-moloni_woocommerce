@@ -222,49 +222,11 @@ class Product
         $this->setSummary();
         $this->setProperties();
 
-        $values = [
-            'product_id' => $this->product_id,
-            // Mandatory update fields echoed back unchanged from Moloni:
-            'category_id' => (int)($this->moloniProduct['category_id'] ?? 0),
-            'type' => (int)($this->moloniProduct['type'] ?? 1),
-            'name' => (string)($this->moloniProduct['name'] ?? ''),
-            'reference' => $this->reference,
-            'unit_id' => (int)($this->moloniProduct['unit_id'] ?? 0),
-            'has_stock' => (int)($this->moloniProduct['has_stock'] ?? 0),
-            'stock' => (float)($this->moloniProduct['stock'] ?? 0),
-            'visibility_id' => (int)($this->moloniProduct['visibility_id'] ?? 1),
-            // Selected fields (setters above already respected the toggles):
-            'summary' => $this->summary,
-            'price' => $this->price,
-        ];
+        $values = $this->buildMoloniEchoPayload();
 
-        // Taxes/exemption echoed back as-is so they are never cleared by omission.
-        $taxes = [];
-
-        foreach (($this->moloniProduct['taxes'] ?? []) as $order => $tax) {
-            if (!is_array($tax)) {
-                continue;
-            }
-
-            $taxId = (int)($tax['tax_id'] ?? ($tax['tax']['tax_id'] ?? 0));
-
-            if ($taxId <= 0) {
-                continue;
-            }
-
-            $taxes[] = [
-                'tax_id' => $taxId,
-                'value' => (float)($tax['value'] ?? 0),
-                'order' => (int)($tax['order'] ?? $order),
-                'cumulative' => (int)($tax['cumulative'] ?? 0),
-            ];
-        }
-
-        $values['taxes'] = $taxes;
-
-        if (!empty($this->moloniProduct['exemption_reason'])) {
-            $values['exemption_reason'] = (string)$this->moloniProduct['exemption_reason'];
-        }
+        // Selected fields (setters above already respected the toggles):
+        $values['summary'] = $this->summary;
+        $values['price'] = $this->price;
 
         if (!empty($this->ean)) {
             $values['ean'] = $this->ean;
@@ -304,6 +266,127 @@ class Product
         $this->syncImage($values);
 
         return $changed;
+    }
+
+    /**
+     * Set the Moloni sale price equal to the site's price — used by the Tools
+     * "Igualar preço no Moloni" sweep (WooCommerce → Moloni). Sends the
+     * WooCommerce price EXCLUDING tax (Moloni prices are ex-VAT) and echoes
+     * every other mandatory field back exactly as loaded from Moloni. Ignores
+     * the per-field "preço" toggle — this tool exists precisely to push prices.
+     *
+     * Requires loadByReference() to have succeeded first.
+     *
+     * @return string 'updated' | 'equal' | 'no_price' (WC has no usable price —
+     *                a Moloni price is never zeroed)
+     *
+     * @throws APIException
+     * @throws GenericException
+     */
+    public function pushPrice(): string
+    {
+        if (empty($this->product_id) || empty($this->moloniProduct)) {
+            throw new GenericException(__('Produto Moloni não carregado'));
+        }
+
+        $this->reference = (string)($this->moloniProduct['reference'] ?? '');
+
+        $wcPrice = (float)wc_get_price_excluding_tax($this->product);
+
+        if ($wcPrice <= 0 && $this->productParent) {
+            $wcPrice = (float)wc_get_price_excluding_tax($this->productParent);
+        }
+
+        if ($wcPrice <= 0) {
+            return 'no_price';
+        }
+
+        $moloniPrice = (float)($this->moloniProduct['price'] ?? 0);
+
+        if (round($wcPrice, 5) === round($moloniPrice, 5)) {
+            return 'equal';
+        }
+
+        $values = $this->buildMoloniEchoPayload();
+        $values['price'] = $wcPrice;
+
+        $update = Curl::simple('products/update', $values);
+
+        if (!isset($update['product_id'])) {
+            throw new GenericException(__('Erro ao atualizar o preço do produto') . ' ' . $this->reference);
+        }
+
+        Storage::$LOGGER->info(
+            sprintf(
+                __('Preço do artigo %1$s igualado no Moloni: %2$.2f€ → %3$.2f€ (sem IVA)'),
+                $this->reference,
+                $moloniPrice,
+                $wcPrice
+            ),
+            [
+                'tag' => 'controller:product:pushprice',
+                'product_id' => $this->product_id,
+                'old_price' => $moloniPrice,
+                'new_price' => $wcPrice,
+            ]
+        );
+
+        return 'updated';
+    }
+
+    /**
+     * Payload for a Moloni products/update that changes NOTHING: every mandatory
+     * field (plus taxes/exemption/summary/price, which would otherwise be cleared
+     * by omission) echoed back exactly as loaded from Moloni. Callers override
+     * only the fields they intend to change. Requires loadByReference().
+     *
+     * @return array
+     */
+    private function buildMoloniEchoPayload(): array
+    {
+        $values = [
+            'product_id' => $this->product_id,
+            'category_id' => (int)($this->moloniProduct['category_id'] ?? 0),
+            'type' => (int)($this->moloniProduct['type'] ?? 1),
+            'name' => (string)($this->moloniProduct['name'] ?? ''),
+            'reference' => (string)($this->moloniProduct['reference'] ?? $this->reference),
+            'unit_id' => (int)($this->moloniProduct['unit_id'] ?? 0),
+            'has_stock' => (int)($this->moloniProduct['has_stock'] ?? 0),
+            'stock' => (float)($this->moloniProduct['stock'] ?? 0),
+            'visibility_id' => (int)($this->moloniProduct['visibility_id'] ?? 1),
+            'summary' => (string)($this->moloniProduct['summary'] ?? ''),
+            'price' => (float)($this->moloniProduct['price'] ?? 0),
+        ];
+
+        // Taxes/exemption echoed back as-is so they are never cleared by omission.
+        $taxes = [];
+
+        foreach (($this->moloniProduct['taxes'] ?? []) as $order => $tax) {
+            if (!is_array($tax)) {
+                continue;
+            }
+
+            $taxId = (int)($tax['tax_id'] ?? ($tax['tax']['tax_id'] ?? 0));
+
+            if ($taxId <= 0) {
+                continue;
+            }
+
+            $taxes[] = [
+                'tax_id' => $taxId,
+                'value' => (float)($tax['value'] ?? 0),
+                'order' => (int)($tax['order'] ?? $order),
+                'cumulative' => (int)($tax['cumulative'] ?? 0),
+            ];
+        }
+
+        $values['taxes'] = $taxes;
+
+        if (!empty($this->moloniProduct['exemption_reason'])) {
+            $values['exemption_reason'] = (string)$this->moloniProduct['exemption_reason'];
+        }
+
+        return $values;
     }
 
     //          Gets          //

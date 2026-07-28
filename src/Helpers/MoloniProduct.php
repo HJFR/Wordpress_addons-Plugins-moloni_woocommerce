@@ -346,6 +346,104 @@ class MoloniProduct
     }
 
     /**
+     * RECALCULATE the WooCommerce sale price from the plugin's pricing rules and
+     * SET it — used by the Tools "Atualizar preços" sweep (Moloni → WooCommerce).
+     *
+     * Rules: supplier "Preço de Custo c/ Desc." (net cost after commercial +
+     * financial discounts; falls back to the last document cost) × the margin of
+     * the qualifying discount tier (base margin when none) × VAT when WooCommerce
+     * prices include tax. Unlike the enforceMinimumPrice() FLOOR (which only
+     * raises below-minimum prices), this sets the computed price in BOTH
+     * directions, so every matched product ends up exactly on the rules.
+     *
+     * Also persists the cost + supplier-discount meta so the manual-save floor
+     * keeps working from fresh data.
+     *
+     * @param array      $moloniProduct Moloni product payload (product_id, taxes, suppliers?)
+     * @param WC_Product $wcProduct     Fresh WooCommerce product instance
+     *
+     * @return string 'updated' | 'equal' | 'no_cost' | 'skipped'
+     */
+    public static function applyRulePrice(array $moloniProduct, WC_Product $wcProduct): string
+    {
+        // Variable parents have no own price — variations carry the price.
+        if (method_exists($wcProduct, 'is_type') && $wcProduct->is_type('variable')) {
+            return 'skipped';
+        }
+
+        if (empty($moloniProduct['product_id'])) {
+            return 'skipped';
+        }
+
+        // Supplier info: discounted net cost + discount % for the tier selection.
+        if (!empty($moloniProduct['suppliers'])) {
+            $discountInfo = self::extractSupplierDiscount($moloniProduct);
+        } else {
+            $discountInfo = self::fetchSupplierDiscount((int)$moloniProduct['product_id']);
+        }
+
+        $costPrice = (float)($discountInfo['cost_net'] ?? 0);
+
+        if ($costPrice <= 0) {
+            $fetched = self::fetchCostPrice((int)$moloniProduct['product_id']);
+            $costPrice = ($fetched !== null) ? $fetched : 0.0;
+        }
+
+        if ($costPrice <= 0) {
+            return 'no_cost'; // no cost in Moloni — nothing to derive a price from
+        }
+
+        $discountPct = (float)($discountInfo['discount_pct'] ?? 0);
+
+        // Keep cost + discount meta fresh (feeds the manual-save price floor).
+        self::setCostPriceOnWcProduct($wcProduct, $costPrice);
+        $wcProduct->update_meta_data('_moloni_supplier_discount_pct', $discountPct);
+
+        $target = self::calculateMinimumSalePrice($costPrice, $moloniProduct['taxes'] ?? [], $discountPct);
+
+        if ($target <= 0) {
+            $wcProduct->save();
+
+            return 'no_cost';
+        }
+
+        $rawCurrent = $wcProduct->get_regular_price();
+        $current = ($rawCurrent === '' || $rawCurrent === null) ? 0.0 : (float)$rawCurrent;
+
+        if (abs($current - $target) < 0.005) {
+            $wcProduct->save(); // persist the refreshed cost/discount meta
+
+            return 'equal';
+        }
+
+        $wcProduct->set_regular_price((string)$target);
+        $wcProduct->save();
+
+        $reference = (string)($moloniProduct['reference'] ?? $wcProduct->get_sku());
+
+        Storage::$LOGGER->info(
+            sprintf(
+                __('Preço do produto %1$s recalculado pelas regras: %2$.2f€ → %3$.2f€'),
+                $reference,
+                $current,
+                $target
+            ),
+            [
+                'tag' => 'helper:moloniproduct:ruleprice',
+                'reference' => $reference,
+                'wc_id' => $wcProduct->get_id(),
+                'old_price' => $current,
+                'new_price' => $target,
+                'cost_price' => $costPrice,
+                'discount_pct' => $discountPct,
+                'applied_margin' => self::resolveMargin($discountPct),
+            ]
+        );
+
+        return 'updated';
+    }
+
+    /**
      * Check if WooCommerce native COGS feature is enabled
      *
      * @return bool

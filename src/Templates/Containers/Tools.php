@@ -144,6 +144,60 @@ $mnProgressLine = static function (string $rowMode) use ($mnState, $mnFullArmed,
     <tr>
         <th class="p-8">
             <strong class="name">
+                <?php esc_html_e('Atualizar preços de venda (Moloni → WooCommerce)') ?>
+            </strong>
+            <p class='description'>
+                <?php esc_html_e('Para cada produto Moloni que EXISTE no WooCommerce (correspondência por referência/SKU), RECALCULA o preço de venda pelas regras do plugin — preço de custo c/ desconto do fornecedor × margem do escalão de desconto (margem base se nenhum encaixar), mais IVA se os preços do site o incluem — e DEFINE-O, para cima ou para baixo. Produtos sem preço de custo no Moloni ficam inalterados. Não altera stock nem cria produtos. Decorre em segundo plano, em lotes (limite API 60 pedidos/min).') ?>
+                <?php $mnProgressLine(\Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES); ?>
+            </p>
+        </th>
+        <td class="run-tool p-8 text-right">
+            <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncPricesToWc'), 'moloni_sync_prices_to_wc')) ?>'
+               class="button button-large"
+            >
+                <?php echo ($mnFullArmed && $mnMode === \Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES) ? esc_html__('Atualização de preços (em curso)') : esc_html__('Atualizar preços → WooCommerce'); ?>
+            </a>
+            <?php if ($mnFullArmed && $mnMode === \Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES && empty($mnCancelPending)) : ?>
+                <br/><br/>
+                <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncStocksCancel'), 'moloni_sync_stocks_cancel')) ?>'
+                   class="button button-large"
+                >
+                    <?php esc_html_e('Cancelar sincronização') ?>
+                </a>
+            <?php endif; ?>
+        </td>
+    </tr>
+
+    <tr>
+        <th class="p-8">
+            <strong class="name">
+                <?php esc_html_e('Igualar preços no Moloni (WooCommerce → Moloni)') ?>
+            </strong>
+            <p class='description'>
+                <?php esc_html_e('Para cada produto WooCommerce que EXISTE no Moloni (correspondência por referência/SKU), define o preço de venda do artigo Moloni IGUAL ao preço do site (sem IVA — o Moloni guarda preços sem imposto). Todos os restantes dados do artigo Moloni ficam exatamente como estão. Produtos sem preço no site ficam inalterados; não cria artigos. Decorre em segundo plano, em lotes (limite API 60 pedidos/min).') ?>
+                <?php $mnProgressLine(\Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES_WM); ?>
+            </p>
+        </th>
+        <td class="run-tool p-8 text-right">
+            <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncPricesToMoloni'), 'moloni_sync_prices_to_moloni')) ?>'
+               class="button button-large"
+            >
+                <?php echo ($mnFullArmed && $mnMode === \Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES_WM) ? esc_html__('Igualação de preços (em curso)') : esc_html__('Igualar preços → Moloni'); ?>
+            </a>
+            <?php if ($mnFullArmed && $mnMode === \Moloni\Services\Stocks\SyncStockByPriority::MODE_PRICES_WM && empty($mnCancelPending)) : ?>
+                <br/><br/>
+                <a href='<?= esc_url(wp_nonce_url(admin_url('admin.php?page=moloni&tab=tools&action=syncStocksCancel'), 'moloni_sync_stocks_cancel')) ?>'
+                   class="button button-large"
+                >
+                    <?php esc_html_e('Cancelar sincronização') ?>
+                </a>
+            <?php endif; ?>
+        </td>
+    </tr>
+
+    <tr>
+        <th class="p-8">
+            <strong class="name">
                 <?php esc_html_e('Listar produtos Moloni') ?>
             </strong>
             <p class='description'>

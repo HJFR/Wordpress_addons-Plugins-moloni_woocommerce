@@ -104,6 +104,7 @@ class Crons
                 $stats['priced'] = (int)($stats['priced'] ?? 0) + $service->countPricedOnly();
                 $stats['equal'] = (int)($stats['equal'] ?? 0) + $service->countEqual();
                 $stats['not_found'] = (int)($stats['not_found'] ?? 0) + $service->countNotFound();
+                $stats['skipped'] = (int)($stats['skipped'] ?? 0) + $service->countSkipped();
 
                 if ($service->isPhaseComplete()) {
                     $nextPhase = (int)$state['phase'] + 1;
@@ -135,6 +136,7 @@ class Crons
                     'priced_only' => $service->countPricedOnly(),
                     'equal' => $service->countEqual(),
                     'not_found' => $service->countNotFound(),
+                    'skipped' => $service->countSkipped(),
                 ]);
 
                 return true;
