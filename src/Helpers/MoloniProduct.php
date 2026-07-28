@@ -3,10 +3,12 @@
 namespace Moloni\Helpers;
 
 use WC_Product;
+use WC_Tax;
 use Moloni\Curl;
 use Moloni\Notice;
 use Moloni\Storage;
 use Moloni\Enums\SaftType;
+use Moloni\Enums\TaxType;
 use Moloni\Exceptions\APIException;
 
 class MoloniProduct
@@ -118,6 +120,229 @@ class MoloniProduct
         } else {
             $product->update_meta_data('_moloni_cost_price', $costPrice);
         }
+    }
+
+    /**
+     * Apply the Moloni EAN/barcode to a WooCommerce product (Moloni is the source
+     * of truth).
+     *
+     * Writes the NATIVE WooCommerce GTIN/EAN field (`_global_unique_id`, WC 9.2+) —
+     * what get_global_unique_id() and downstream tools (e.g. price intelligence)
+     * read — plus the legacy '_barcode' meta for barcode-scanner plugins. Moloni
+     * always wins, even over a different existing value. An empty/absent 'ean'
+     * (some Moloni payloads omit it) is left untouched, so a valid barcode is never
+     * cleared. Only STAGES the change (does not save); returns whether the value
+     * actually changed so the caller can decide whether to persist.
+     *
+     * @param WC_Product $product       WooCommerce product
+     * @param array      $moloniProduct Moloni product payload
+     *
+     * @return bool True when the barcode changed and the product needs saving
+     */
+    public static function applyEan(WC_Product $product, array $moloniProduct): bool
+    {
+        $ean = isset($moloniProduct['ean']) ? trim((string) $moloniProduct['ean']) : '';
+
+        if ($ean === '') {
+            return false; // not provided in this payload — never clear a valid barcode
+        }
+
+        $current = method_exists($product, 'get_global_unique_id')
+            ? (string) $product->get_global_unique_id()
+            : (string) $product->get_meta('_global_unique_id', true);
+
+        if ($current === $ean) {
+            return false; // already in sync
+        }
+
+        if (method_exists($product, 'set_global_unique_id')) {
+            $product->set_global_unique_id($ean); // WC 9.2+ native GTIN field
+        } else {
+            $product->update_meta_data('_global_unique_id', $ean); // pre-9.2 fallback
+        }
+
+        $product->update_meta_data('_barcode', $ean);
+
+        return true;
+    }
+
+    /**
+     * Apply the Moloni product tax (IVA) to a WooCommerce product's tax
+     * status/class (Moloni is the source of truth).
+     *
+     * Mapping rules (mirrors the create flow):
+     *  - no Moloni taxes            → tax status 'none' (product sells without VAT)
+     *  - one IVA percentage tax     → status 'taxable' + the WC tax class whose
+     *    base rate for the tax's fiscal zone equals the Moloni value; when no
+     *    class matches, only the status is set and a warning is logged (creating
+     *    WC tax rates automatically would be too invasive)
+     *  - multiple taxes             → status 'taxable' only (WC has 1 class/product)
+     *
+     * Only STAGES changes (does not save); returns whether anything changed so
+     * the caller decides on persisting — same contract as applyEan().
+     *
+     * @param WC_Product $product       WooCommerce product
+     * @param array      $moloniProduct Moloni product payload (needs 'taxes')
+     *
+     * @return bool True when tax status/class changed and the product needs saving
+     */
+    public static function applyTaxClass(WC_Product $product, array $moloniProduct): bool
+    {
+        if (!array_key_exists('taxes', $moloniProduct)) {
+            return false; // payload without tax info — do not guess
+        }
+
+        $moloniTaxes = is_array($moloniProduct['taxes']) ? $moloniProduct['taxes'] : [];
+
+        if (empty($moloniTaxes)) {
+            if ($product->get_tax_status() === 'none') {
+                return false;
+            }
+
+            $product->set_tax_status('none');
+
+            return true;
+        }
+
+        $changed = false;
+
+        if ($product->get_tax_status() !== 'taxable') {
+            $product->set_tax_status('taxable');
+            $changed = true;
+        }
+
+        // WooCommerce supports a single tax class per product.
+        if (count($moloniTaxes) > 1) {
+            return $changed;
+        }
+
+        $moloniTax = $moloniTaxes[0]['tax'] ?? $moloniTaxes[0];
+
+        if (
+            !is_array($moloniTax) ||
+            !isset($moloniTax['saft_type'], $moloniTax['type'], $moloniTax['value']) ||
+            (int)$moloniTax['saft_type'] !== SaftType::IVA ||
+            (int)$moloniTax['type'] !== TaxType::PERCENTAGE
+        ) {
+            return $changed; // stamp duty / fixed taxes have no WC class equivalent
+        }
+
+        $fiscalZone = strtoupper((string)($moloniTax['fiscal_zone'] ?? 'PT'));
+        $taxClasses = function_exists('wc_get_product_tax_class_options') ? (wc_get_product_tax_class_options() ?? []) : [];
+
+        foreach ($taxClasses as $taxClass => $taxClassLabel) {
+            $taxRates = WC_Tax::find_rates([
+                'country' => $fiscalZone,
+                'tax_class' => $taxClass,
+            ]);
+
+            foreach ($taxRates as $taxRate) {
+                // Integer comparison at 5 decimal places avoids float noise.
+                if ((int)round($taxRate['rate'] * 100000) !== (int)round((float)$moloniTax['value'] * 100000)) {
+                    continue;
+                }
+
+                if ($product->get_tax_class() === (string)$taxClass) {
+                    return $changed; // already correct
+                }
+
+                $product->set_tax_class((string)$taxClass);
+
+                return true;
+            }
+        }
+
+        Storage::$LOGGER->warning(__('Nenhuma classe de taxa do WooCommerce corresponde ao IVA do Moloni'), [
+            'tag' => 'helper:moloniproduct:taxclass:nomatch',
+            'wc_id' => $product->get_id(),
+            'moloni_tax_value' => (float)$moloniTax['value'],
+            'fiscal_zone' => $fiscalZone,
+        ]);
+
+        return $changed;
+    }
+
+    /**
+     * Apply the per-field Moloni → WooCommerce syncs (EAN, tax) that are enabled
+     * in Settings. Only stages changes; returns whether the product needs saving.
+     *
+     * @param WC_Product $product       WooCommerce product
+     * @param array      $moloniProduct Moloni product payload
+     *
+     * @return bool
+     */
+    public static function applyMoloniFields(WC_Product $product, array $moloniProduct): bool
+    {
+        $changed = false;
+
+        if (SyncFields::mwEan() && self::applyEan($product, $moloniProduct)) {
+            $changed = true;
+        }
+
+        if (SyncFields::mwTax() && self::applyTaxClass($product, $moloniProduct)) {
+            $changed = true;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Sync the cost price from Moloni and enforce the minimum sale price — the
+     * SINGLE shared path used by every Moloni → WooCommerce sweep.
+     *
+     * The cost source is the supplier "Preço de Custo c/ Desc." (net cost after
+     * commercial + financial discounts, via the suppliers array); when the
+     * product has no supplier cost configured, it falls back to the last
+     * document cost (products/getLastCostPrice) — the pre-5.4 behaviour.
+     *
+     * API budget: at most ONE extra call per product (products/getOne when the
+     * payload lacks the suppliers array, or getLastCostPrice as fallback) —
+     * same worst case as before, relevant under the 60 req/min quota.
+     *
+     * @param array      $moloniProduct Moloni product payload
+     * @param WC_Product $wcProduct     Fresh WooCommerce product instance
+     */
+    public static function syncCostAndPriceFloor(array $moloniProduct, WC_Product $wcProduct): void
+    {
+        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
+            return;
+        }
+
+        if (empty($moloniProduct['product_id'])) {
+            return;
+        }
+
+        // Supplier info carries BOTH the discounted net cost and the discount %
+        // used by the margin tiers — one lookup serves both purposes.
+        if (!empty($moloniProduct['suppliers'])) {
+            $discountInfo = self::extractSupplierDiscount($moloniProduct);
+        } else {
+            $discountInfo = self::fetchSupplierDiscount((int)$moloniProduct['product_id']);
+        }
+
+        $costPrice = (float)($discountInfo['cost_net'] ?? 0);
+
+        if ($costPrice <= 0) {
+            $fetched = self::fetchCostPrice((int)$moloniProduct['product_id']);
+
+            if ($fetched === null) {
+                return;
+            }
+
+            $costPrice = $fetched;
+        }
+
+        self::setCostPriceOnWcProduct($wcProduct, $costPrice);
+
+        self::enforceMinimumPrice(
+            $wcProduct,
+            $costPrice,
+            $moloniProduct['taxes'] ?? [],
+            $moloniProduct['reference'] ?? '',
+            $discountInfo
+        );
+
+        $wcProduct->save();
     }
 
     /**

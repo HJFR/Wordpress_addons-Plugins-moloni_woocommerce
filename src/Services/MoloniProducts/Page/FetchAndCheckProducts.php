@@ -49,7 +49,33 @@ class FetchAndCheckProducts
             $service = new CheckProduct($product, $this->warehouseId);
             $service->run();
 
+            // Per-page status filter: "not in WooCommerce" / "stock differs" are
+            // already computed by CheckProduct (its create / update-stock flags),
+            // so we simply keep the rows that match the chosen status.
+            if (!$this->rowMatchesStatus($service->getRow())) {
+                continue;
+            }
+
             $this->rows[] = $service->getRowsHtml();
+        }
+    }
+
+    /**
+     * Keep only rows matching the chosen per-page status filter.
+     *
+     * @param array $row Row data from CheckProduct::getRow()
+     */
+    private function rowMatchesStatus(array $row): bool
+    {
+        $wanted = $this->filters['filter_status'] ?? '';
+
+        switch ($wanted) {
+            case 'not_in_wc':
+                return !empty($row['tool_show_create_button']);
+            case 'stock_diff':
+                return !empty($row['tool_show_update_stock_button']);
+            default:
+                return true; // no status filter (or unknown value) → keep all
         }
     }
 
@@ -59,6 +85,7 @@ class FetchAndCheckProducts
             'paged' => '%#%',
             'filter_name' => $this->filters['filter_name'],
             'filter_reference' => $this->filters['filter_reference'],
+            'filter_status' => $this->filters['filter_status'] ?? '',
         ]);
 
         $args = [

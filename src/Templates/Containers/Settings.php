@@ -943,7 +943,7 @@ try {
                         </option>
                     </select>
                     <p class='description'>
-                        <?php esc_html_e('Sincronizar automaticamente o preço de custo dos artigos do Moloni para o WooCommerce (utiliza o campo COGS nativo do WooCommerce se disponível)') ?>
+                        <?php esc_html_e('Sincronizar automaticamente o preço de custo dos artigos do Moloni para o WooCommerce (utiliza o campo COGS nativo do WooCommerce se disponível). Usa o "Preço de Custo c/ Desc." do fornecedor (custo líquido após descontos comercial e financeiro); se o artigo não tiver custo de fornecedor, usa o último preço de custo documentado.') ?>
                     </p>
                 </td>
             </tr>
@@ -1030,6 +1030,144 @@ try {
                     </p>
                 </td>
             </tr>
+            </tbody>
+        </table>
+
+        <!-- Sincronização de campos: Moloni → WooCommerce -->
+        <h2 class="title">
+            <?php esc_html_e('Sincronização de campos — Moloni → WooCommerce') ?>
+        </h2>
+        <p class="description">
+            <?php esc_html_e('Escolha os campos que o Moloni sobrepõe no WooCommerce durante as sincronizações (stock automático, sincronização completa e importação de artigos). O stock e o preço de custo têm as suas próprias opções acima.') ?>
+        </p>
+        <table class="form-table mb-4">
+            <tbody>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_mw_ean"><?php esc_html_e('EAN / código de barras') ?></label>
+                </th>
+                <td>
+                    <?php $mwEan = defined('MOLONI_SYNC_MW_EAN') ? (int)MOLONI_SYNC_MW_EAN : 1; ?>
+                    <select id="moloni_sync_mw_ean" name='opt[moloni_sync_mw_ean]' class='inputOut'>
+                        <option value='0' <?= ($mwEan === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($mwEan === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Escreve o EAN do Moloni no campo GTIN nativo do WooCommerce (o Moloni é a fonte de verdade; um EAN vazio no Moloni nunca apaga o existente).') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_mw_tax"><?php esc_html_e('IVA (classe de taxa)') ?></label>
+                </th>
+                <td>
+                    <?php $mwTax = defined('MOLONI_SYNC_MW_TAX') ? (int)MOLONI_SYNC_MW_TAX : 0; ?>
+                    <select id="moloni_sync_mw_tax" name='opt[moloni_sync_mw_tax]' class='inputOut'>
+                        <option value='0' <?= ($mwTax === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($mwTax === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Aplica o IVA do artigo Moloni ao estado/classe de taxa do WooCommerce: sem taxas → "Nenhum"; um IVA percentual → classe de taxa do WooCommerce com a mesma percentagem (se nenhuma corresponder, fica registado no log e a classe não é alterada).') ?>
+                    </p>
+                </td>
+            </tr>
+
+            </tbody>
+        </table>
+
+        <!-- Sincronização de campos: WooCommerce → Moloni -->
+        <h2 class="title">
+            <?php esc_html_e('Sincronização de campos — WooCommerce → Moloni') ?>
+        </h2>
+        <p class="description">
+            <?php esc_html_e('Escolha os campos enviados para o Moloni quando um artigo é criado/atualizado (requer "Criar artigos" ou "Atualizar artigos" ativos acima).') ?>
+        </p>
+        <table class="form-table mb-4">
+            <tbody>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_wm_ean"><?php esc_html_e('EAN / código de barras') ?></label>
+                </th>
+                <td>
+                    <?php $wmEan = defined('MOLONI_SYNC_WM_EAN') ? (int)MOLONI_SYNC_WM_EAN : 1; ?>
+                    <select id="moloni_sync_wm_ean" name='opt[moloni_sync_wm_ean]' class='inputOut'>
+                        <option value='0' <?= ($wmEan === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($wmEan === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Envia o EAN do WooCommerce (campo GTIN nativo ou meta de plugins de código de barras) para o artigo Moloni.') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_wm_price"><?php esc_html_e('Preço de venda') ?></label>
+                </th>
+                <td>
+                    <?php $wmPrice = defined('MOLONI_SYNC_WM_PRICE') ? (int)MOLONI_SYNC_WM_PRICE : 1; ?>
+                    <select id="moloni_sync_wm_price" name='opt[moloni_sync_wm_price]' class='inputOut'>
+                        <option value='0' <?= ($wmPrice === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($wmPrice === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Envia o preço de venda do WooCommerce (sem IVA) para o Moloni. Se desativado, o preço existente no Moloni é mantido nas atualizações (na criação o preço é sempre enviado — a API exige-o).') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_wm_properties"><?php esc_html_e('Propriedades (atributos)') ?></label>
+                </th>
+                <td>
+                    <?php $wmProps = defined('MOLONI_SYNC_WM_PROPERTIES') ? (int)MOLONI_SYNC_WM_PROPERTIES : 0; ?>
+                    <select id="moloni_sync_wm_properties" name='opt[moloni_sync_wm_properties]' class='inputOut'>
+                        <option value='0' <?= ($wmProps === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($wmProps === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Converte os atributos do WooCommerce em propriedades de artigo do Moloni (as propriedades em falta são criadas automaticamente pelo nome). Artigos sem atributos não alteram as propriedades existentes no Moloni.') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_wm_image"><?php esc_html_e('Imagem destacada') ?></label>
+                </th>
+                <td>
+                    <?php $wmImage = defined('MOLONI_SYNC_WM_IMAGE') ? (int)MOLONI_SYNC_WM_IMAGE : 0; ?>
+                    <select id="moloni_sync_wm_image" name='opt[moloni_sync_wm_image]' class='inputOut'>
+                        <option value='0' <?= ($wmImage === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($wmImage === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Envia a imagem destacada do WooCommerce para o artigo Moloni (JPEG/PNG/GIF/WebP até 2 MB; só reenvia quando a imagem muda). Nota: a API pública do Moloni não documenta o envio de imagens — é feito em melhor esforço e, se a conta não o suportar, fica apenas registado no log sem afetar a restante sincronização.') ?>
+                    </p>
+                </td>
+            </tr>
+
+            <tr>
+                <th>
+                    <label for="moloni_sync_wm_summary"><?php esc_html_e('Resumo (descrição curta)') ?></label>
+                </th>
+                <td>
+                    <?php $wmSummary = defined('MOLONI_SYNC_WM_SUMMARY') ? (int)MOLONI_SYNC_WM_SUMMARY : 0; ?>
+                    <select id="moloni_sync_wm_summary" name='opt[moloni_sync_wm_summary]' class='inputOut'>
+                        <option value='0' <?= ($wmSummary === 0 ? 'selected' : '') ?>><?php esc_html_e('Não') ?></option>
+                        <option value='1' <?= ($wmSummary === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
+                    </select>
+                    <p class='description'>
+                        <?php esc_html_e('Escreve a descrição curta do WooCommerce (texto simples) no "Resumo" do artigo Moloni. Uma descrição curta vazia nunca apaga o resumo existente. Se desativado, o resumo do Moloni é preservado tal como está.') ?>
+                    </p>
+                </td>
+            </tr>
+
             </tbody>
         </table>
 

@@ -12,6 +12,7 @@ $page = (int)($_REQUEST['paged'] ?? 1);
 $filters = [
     'filter_name' => sanitize_text_field($_REQUEST['filter_name'] ?? ''),
     'filter_reference' => sanitize_text_field($_REQUEST['filter_reference'] ?? ''),
+    'filter_status' => sanitize_text_field($_REQUEST['filter_status'] ?? ''),
 ];
 
 $service = new FetchAndCheckProducts();
@@ -65,6 +66,14 @@ $backAction = admin_url('admin.php?page=moloni&tab=tools');
         ?>
     </p>
 </div>
+
+<?php if (!empty($filters['filter_status'])) : ?>
+<div class="notice notice-info m-0">
+    <p>
+        <?php esc_html_e('O filtro de estado aplica-se apenas à página atual (a lista vem paginada do Moloni). Percorra as páginas para ver todos os produtos correspondentes.') ?>
+    </p>
+</div>
+<?php endif; ?>
 
 <form method="get" action='<?= esc_url($currentAction) ?>' class="list_form">
     <input type="hidden" name="page" value="moloni">
@@ -125,7 +134,17 @@ $backAction = admin_url('admin.php?page=moloni&tab=tools');
                         value="<?= esc_html($filters['filter_reference']) ?>"
             </th>
             <th></th>
-            <th></th>
+            <th>
+                <select name="filter_status" class="inputOut ml-0">
+                    <option value=""><?php esc_html_e('Todos') ?></option>
+                    <option value="not_in_wc" <?php selected($filters['filter_status'], 'not_in_wc') ?>>
+                        <?php esc_html_e('Não existe no WooCommerce') ?>
+                    </option>
+                    <option value="stock_diff" <?php selected($filters['filter_status'], 'stock_diff') ?>>
+                        <?php esc_html_e('Stock diferente do Moloni') ?>
+                    </option>
+                </select>
+            </th>
             <th class="flex flex-row gap-2">
                 <button type="button" class="search_button button button-primary">
                     <?php esc_html_e('Pesquisar') ?>

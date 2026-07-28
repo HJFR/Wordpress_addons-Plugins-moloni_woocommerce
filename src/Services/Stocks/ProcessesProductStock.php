@@ -101,43 +101,16 @@ trait ProcessesProductStock
      */
     protected function syncCostPriceFallback(array $product, WC_Product $wcProduct): void
     {
-        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
-            return;
+        // Moloni-owned fields (EAN, IVA — per Settings) are independent of the
+        // cost-price feature: sync them here too, so products that are NOT
+        // stock-managed in Moloni (which never reach UpdateProductStock) still
+        // get them — even when cost-price sync is off.
+        if (MoloniProduct::applyMoloniFields($wcProduct, $product)) {
+            $wcProduct->save();
         }
 
-        if (empty($product['product_id'])) {
-            return;
-        }
-
-        $costPrice = MoloniProduct::fetchCostPrice((int)$product['product_id']);
-
-        if ($costPrice === null) {
-            return;
-        }
-
-        MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
-
-        // Supplier discount for the tier-based margin: use the suppliers array if
-        // this payload carries it, else fetch via getOne — but ONLY when tiers are
-        // configured (otherwise the discount can't change the margin and the extra
-        // API call is wasted against the 60 req/min limit).
-        if (!empty($product['suppliers'])) {
-            $discountInfo = MoloniProduct::extractSupplierDiscount($product);
-        } elseif (MoloniProduct::hasMarginTiers()) {
-            $discountInfo = MoloniProduct::fetchSupplierDiscount((int)$product['product_id']);
-        } else {
-            $discountInfo = [];
-        }
-
-        // Enforce minimum sale price based on cost + the discount-based tier
-        MoloniProduct::enforceMinimumPrice(
-            $wcProduct,
-            $costPrice,
-            $product['taxes'] ?? [],
-            $product['reference'] ?? '',
-            $discountInfo
-        );
-
-        $wcProduct->save();
+        // Shared cost path: supplier "Preço de Custo c/ Desc." first, last
+        // document cost as fallback; enforces the minimum-price floor.
+        MoloniProduct::syncCostAndPriceFloor($product, $wcProduct);
     }
 }

@@ -103,6 +103,11 @@ class UpdateProductStock extends ImportService
             // Translation: "Service was locked"
         }
 
+        // Keep the Moloni-owned fields (EAN, IVA — per Settings) in sync too.
+        // Runs BEFORE the stock-match early-return below, so they are refreshed
+        // even when the stock is already correct.
+        $this->syncMoloniFields();
+
         // Skip update if stocks already match - this is not an error condition,
         // but we throw an exception to signal that no action was taken
         if ($this->wcStock === $this->moloniStock) {
@@ -141,6 +146,20 @@ class UpdateProductStock extends ImportService
             'ml_reference' => $this->moloniProduct['reference'],  // Moloni SKU/reference
             'ml_stock' => $this->moloniStock,           // New stock value (from Moloni)
         ];
+    }
+
+    /**
+     * Synchronise the Moloni-owned per-field data (EAN and, when enabled, the
+     * IVA tax class) from Moloni — Moloni is the source of truth. Which fields
+     * apply is governed by the Settings toggles (see Helpers\SyncFields). Saves
+     * only when something actually changes, to avoid needless writes during
+     * bulk syncs.
+     */
+    private function syncMoloniFields(): void
+    {
+        if (MoloniProduct::applyMoloniFields($this->wcProduct, $this->moloniProduct)) {
+            $this->wcProduct->save();
+        }
     }
 
     /**
@@ -186,24 +205,14 @@ class UpdateProductStock extends ImportService
     //            Privates            //
 
     /**
-     * Update cost price from Moloni and enforce minimum sale price
+     * Update cost price from Moloni and enforce minimum sale price.
      *
-     * Fetches the last cost price from Moloni API, sets it on
-     * the WooCommerce product, then validates the selling price
-     * against the calculated minimum (cost × margin × VAT).
+     * Delegates to the single shared cost path (supplier "Preço de Custo c/
+     * Desc." first, last document cost as fallback) so every sweep applies the
+     * same money-touching logic.
      */
     private function updateCostPrice(): void
     {
-        if (!defined('MOLONI_COST_PRICE_SYNC') || (int)MOLONI_COST_PRICE_SYNC !== 1) {
-            return;
-        }
-
-        $costPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
-
-        if ($costPrice === null) {
-            return;
-        }
-
         // Reload product to get fresh object after stock update
         $wcProduct = wc_get_product($this->wcProduct->get_id());
 
@@ -211,30 +220,7 @@ class UpdateProductStock extends ImportService
             return;
         }
 
-        MoloniProduct::setCostPriceOnWcProduct($wcProduct, $costPrice);
-
-        // Supplier discount: the getModifiedSince payload is light and may omit
-        // the suppliers array — use it when present, otherwise fetch via getOne,
-        // but ONLY when discount→margin tiers exist (else the discount can't change
-        // the margin and the extra API call is wasted, vs the 60 req/min limit).
-        if (!empty($this->moloniProduct['suppliers'])) {
-            $discountInfo = MoloniProduct::extractSupplierDiscount($this->moloniProduct);
-        } elseif (MoloniProduct::hasMarginTiers()) {
-            $discountInfo = MoloniProduct::fetchSupplierDiscount((int)$this->moloniProduct['product_id']);
-        } else {
-            $discountInfo = [];
-        }
-
-        // Enforce minimum sale price based on cost + the discount-based tier
-        MoloniProduct::enforceMinimumPrice(
-            $wcProduct,
-            $costPrice,
-            $this->moloniProduct['taxes'] ?? [],
-            $this->moloniProduct['reference'] ?? '',
-            $discountInfo
-        );
-
-        $wcProduct->save();
+        MoloniProduct::syncCostAndPriceFloor($this->moloniProduct, $wcProduct);
     }
 
     /**

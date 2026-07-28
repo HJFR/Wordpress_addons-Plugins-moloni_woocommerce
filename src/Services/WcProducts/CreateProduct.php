@@ -10,6 +10,7 @@ use Moloni\Enums\Boolean;
 use Moloni\Enums\TaxType;
 use Moloni\Enums\SaftType;
 use Moloni\Helpers\MoloniProduct;
+use Moloni\Helpers\SyncFields;
 use Moloni\Exceptions\APIException;
 
 /**
@@ -197,7 +198,16 @@ class CreateProduct extends ImportService
             return;
         }
 
-        $this->lastFetchedCostPrice = MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
+        // Prefer the supplier "Preço de Custo c/ Desc." (net cost after the
+        // commercial + financial discounts) — the create flow already holds the
+        // full getOne payload, so this costs no extra API call. Fall back to the
+        // last document cost when the product has no supplier cost configured.
+        $discountInfo = MoloniProduct::extractSupplierDiscount($this->moloniProduct);
+        $netCost = (float)($discountInfo['cost_net'] ?? 0);
+
+        $this->lastFetchedCostPrice = $netCost > 0
+            ? $netCost
+            : MoloniProduct::fetchCostPrice((int)$this->moloniProduct['product_id']);
 
         MoloniProduct::setCostPriceOnWcProduct($this->wcProduct, $this->lastFetchedCostPrice);
     }
@@ -468,21 +478,23 @@ class CreateProduct extends ImportService
     }
 
     /**
-     * Set product EAN/barcode from Moloni 'ean' field
-     * 
-     * Moloni API field: ean (string) - EAN barcode
-     * Maps to: WooCommerce custom meta '_barcode'
-     * 
-     * Note: WooCommerce doesn't have a native EAN field, so it's stored
-     * as custom product meta. This can be used by barcode scanner plugins
-     * or for inventory management.
-     * 
-     * The official Moloni plugin also checks for '_global_unique_id' (GTIN)
-     * which was added in WooCommerce for product identification.
+     * Set product EAN/barcode from the Moloni 'ean' field.
+     *
+     * Writes the NATIVE WooCommerce GTIN/EAN field (`_global_unique_id`, WC 9.2+),
+     * which is what get_global_unique_id() — and downstream tools such as price
+     * intelligence — read. The legacy '_barcode' meta is kept in sync for
+     * barcode-scanner plugins. Moloni is the source of truth, so its value always
+     * wins; an empty/absent value is treated as "not provided" and left untouched.
      */
     private function setEan()
     {
-        $this->wcProduct->add_meta_data('_barcode', $this->moloniProduct['ean']);
+        if (!SyncFields::mwEan()) {
+            return; // EAN sync (Moloni → WooCommerce) disabled in Settings
+        }
+
+        // Stage the barcode (Moloni is the source of truth); the fresh product is
+        // persisted by run()'s save(), so no extra save is needed here.
+        MoloniProduct::applyEan($this->wcProduct, $this->moloniProduct);
     }
     /**
  * Set product image from Moloni 'image' field

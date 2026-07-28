@@ -135,6 +135,126 @@ class Curl
     }
 
     /**
+     * Same as simple(), but sends the request as multipart/form-data with one
+     * attached file (used to push the product image to Moloni). Shares the rate
+     * limiter, logging and 429 retry logic.
+     *
+     * The file must have been validated by the caller (existence, image type,
+     * size cap) — this method still re-checks readability defensively and never
+     * logs the binary contents.
+     *
+     * @param string $action    API action (e.g. 'products/update')
+     * @param array  $values    Request fields (nested arrays supported)
+     * @param string $filePath  Absolute path of the file to attach
+     * @param string $fileField Multipart field name for the file
+     * @param int    $retry     Internal 429 retry counter
+     *
+     * @return array|bool
+     *
+     * @throws APIException
+     */
+    public static function simpleWithFile($action, array $values, string $filePath, string $fileField = 'image', int $retry = 0)
+    {
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            throw new APIException(__('Ficheiro de imagem inválido ou ilegível'), ['file' => basename($filePath)]);
+        }
+
+        if (is_array($values) && Storage::$MOLONI_COMPANY_ID) {
+            $values['company_id'] = Storage::$MOLONI_COMPANY_ID;
+        }
+
+        $url = 'https://api.moloni.pt/v2/' . $action . '/?human_errors=true&access_token=' . Storage::$MOLONI_ACCESS_TOKEN;
+
+        if ((int)$retry === 0) {
+            self::throttleRateLimit();
+        }
+
+        $boundary = 'moloni' . bin2hex(random_bytes(16));
+
+        $fileName = basename($filePath);
+        $fileType = wp_check_filetype($fileName);
+        $mime = !empty($fileType['type']) ? $fileType['type'] : 'application/octet-stream';
+
+        $body = '';
+
+        foreach (self::flattenMultipartFields($values) as $name => $value) {
+            $body .= '--' . $boundary . "\r\n";
+            $body .= 'Content-Disposition: form-data; name="' . $name . '"' . "\r\n\r\n";
+            $body .= $value . "\r\n";
+        }
+
+        $body .= '--' . $boundary . "\r\n";
+        $body .= 'Content-Disposition: form-data; name="' . $fileField . '"; filename="' . str_replace(['"', "\r", "\n"], '', $fileName) . '"' . "\r\n";
+        $body .= 'Content-Type: ' . $mime . "\r\n\r\n";
+        $body .= file_get_contents($filePath) . "\r\n";
+        $body .= '--' . $boundary . "--\r\n";
+
+        $response = wp_remote_post($url, [
+            'headers' => ['Content-Type' => 'multipart/form-data; boundary=' . $boundary],
+            'body' => $body,
+            'timeout' => 90
+        ]);
+
+        $responseCode = (int)wp_remote_retrieve_response_code($response);
+
+        if ($responseCode === 429) {
+            $retry++;
+
+            if ($retry < 5) {
+                sleep(2);
+                return self::simpleWithFile($action, $values, $filePath, $fileField, $retry);
+            }
+        }
+
+        $raw = wp_remote_retrieve_body($response);
+        $parsed = json_decode($raw, true);
+
+        // Log fields + file metadata only — never the binary payload.
+        $log = [
+            'url' => $url,
+            'sent' => array_merge($values, ['_file' => $fileName, '_file_bytes' => filesize($filePath)]),
+            'received' => $parsed
+        ];
+
+        self::$logs[] = $log;
+
+        if (!isset($parsed['error'])) {
+            return $parsed;
+        }
+
+        throw new APIException(__('Ups, foi encontrado um erro...'), $log);
+    }
+
+    /**
+     * Flatten a (possibly nested) values array into multipart field names using
+     * bracket notation (taxes[0][tax_id], ...). Field names come from plugin
+     * code (not user input); CR/LF are stripped defensively so a value can never
+     * inject multipart headers via the name.
+     *
+     * @param array  $values
+     * @param string $prefix
+     *
+     * @return array<string,string>
+     */
+    private static function flattenMultipartFields(array $values, string $prefix = ''): array
+    {
+        $out = [];
+
+        foreach ($values as $key => $value) {
+            $name = $prefix === '' ? (string)$key : $prefix . '[' . $key . ']';
+            $name = str_replace(['"', "\r", "\n"], '', $name);
+
+            if (is_array($value)) {
+                $out += self::flattenMultipartFields($value, $name);
+            } elseif ($value !== null) {
+                $out[$name] = (string)$value;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Client-side rate limiter — keeps API usage under Moloni's documented quota
      * of 60 requests per minute per API key (else HTTP 429). Rolling 60-second
      * window: allows fast bursts while under the cap (so single operations like

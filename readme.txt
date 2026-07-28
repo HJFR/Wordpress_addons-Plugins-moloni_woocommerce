@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.3.0
+Stable tag: 5.4.0
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,21 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.4.0 =
+* NOVO: Sincronização de campos configurável, em duas direções, em Configurações → "Sincronização de campos". Cada campo tem a sua própria opção Sim/Não; as predefinições preservam exatamente o comportamento anterior.
+* NOVO (Moloni → WooCommerce): EAN — o EAN do Moloni é escrito no campo GTIN nativo do WooCommerce (`_global_unique_id`, WC 9.2+) e na meta `_barcode`; o Moloni é a fonte de verdade e um EAN vazio nunca apaga o existente (predefinição: ativo).
+* NOVO (Moloni → WooCommerce): IVA — o IVA do artigo Moloni é aplicado ao estado/classe de taxa do WooCommerce: sem taxas → "Nenhum"; um IVA percentual → classe com a mesma percentagem na zona fiscal; sem correspondência → apenas log, sem alteração (predefinição: inativo).
+* ALTERADO (Moloni → WooCommerce): Preço de custo — passa a usar o "Preço de Custo c/ Desc." do fornecedor (custo líquido após descontos comercial + financeiro); sem custo de fornecedor, mantém o fallback para products/getLastCostPrice. Sem chamadas API adicionais face à versão anterior. O piso de preço mínimo (margem por escalões) usa o mesmo custo.
+* NOVO (WooCommerce → Moloni): EAN, Preço de venda, Propriedades, Imagem destacada e Resumo passam a ser selecionáveis por campo:
+* — EAN: enviado com criações/atualizações (predefinição: ativo).
+* — Preço de venda: se desativado, o preço no Moloni é mantido nas atualizações; na criação é sempre enviado, a API exige-o (predefinição: ativo).
+* — Propriedades: atributos WooCommerce → propriedades de artigo Moloni ({property_id, value}); propriedades em falta criadas por nome via productProperties/insert com cache por pedido (1× getAll); artigos sem atributos nunca limpam propriedades existentes (predefinição: inativo).
+* — Imagem destacada: envio multipart em melhor esforço (a API pública Moloni não documenta upload de imagens); JPEG/PNG/GIF/WebP até 2 MB (filtro moloni_image_max_bytes); só reenvia quando o ficheiro muda (hash md5 em meta) — falhas ficam no log e nunca bloqueiam a sincronização de dados (predefinição: inativo).
+* — Resumo: descrição curta do WooCommerce (texto simples, limitada) → "Resumo" do Moloni; vazia nunca apaga o resumo existente (predefinição: inativo).
+* NOVO: Filtro de estado na página de produtos Moloni (Ferramentas): "Não existe no WooCommerce" / "Stock diferente do Moloni" (aplica-se à página atual da listagem).
+* LIMITES API: a deteção de alterações evita chamadas desnecessárias (comparação campo-a-campo antes de products/update, incluindo propriedades; hash de imagem); tudo passa pelo limitador de 60 pedidos/min.
+* SEGURANÇA: sem novas superfícies de entrada além das opções (nonce + sanitização existentes); valores de propriedades/resumo em texto simples e limitados; upload de imagem validado (ficheiro real de imagem, tipo permitido, tamanho máximo) e o binário nunca é registado nos logs.
+
 = 5.3.0 =
 * NOVO: Sincronização completa POR PRIORIDADE. A "Sincronização completa" passa a percorrer o catálogo do WooCommerce por ordem de risco de preço errado (com base na última venda): 1.º produtos COM stock e PUBLICADOS, 2.º com stock mas não publicados, 3.º publicados sem stock e 4.º os restantes. Assim, os produtos comercialmente ativos e de maior risco são corrigidos primeiro. Continua a decorrer em segundo plano (cron a cada 5 min), em lotes, respeitando o limite da API Moloni (60 pedidos/min). Retomável entre lotes (estado guardado em fase + página).
 * NOVO: CANCELAR a sincronização completa a qualquer momento, a partir das Ferramentas. Útil quando se deteta um erro de configuração depois dos primeiros produtos: o cancelamento é verificado no início de cada lote E a cada poucos produtos dentro do lote (leitura direta à BD, à prova de cache), pelo que os produtos restantes não são alterados.
