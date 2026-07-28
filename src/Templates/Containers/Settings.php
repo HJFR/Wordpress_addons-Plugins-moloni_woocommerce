@@ -1070,7 +1070,7 @@ try {
                         <option value='1' <?= ($mwTax === 1 ? 'selected' : '') ?>><?php esc_html_e('Sim') ?></option>
                     </select>
                     <p class='description'>
-                        <?php esc_html_e('Aplica o IVA do artigo Moloni ao estado/classe de taxa do WooCommerce: sem taxas → "Nenhum"; um IVA percentual → classe de taxa do WooCommerce com a mesma percentagem (se nenhuma corresponder, fica registado no log e a classe não é alterada).') ?>
+                        <?php esc_html_e('Aplica o IVA do artigo Moloni ao estado/classe de taxa do WooCommerce: sem taxas → "Nenhum"; um IVA percentual → classe de taxa do WooCommerce com a mesma percentagem (se nenhuma corresponder, fica registado no log e a classe não é alterada). Nota: nas sincronizações de PREÇO Moloni → WooCommerce (preço de custo/piso e a ferramenta "Atualizar preços"), o IVA é SEMPRE verificado e corrigido a partir do Moloni, independentemente desta opção — o Moloni é a fonte do IVA correto.') ?>
                     </p>
                 </td>
             </tr>

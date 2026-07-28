@@ -263,6 +263,36 @@ class MoloniProduct
     }
 
     /**
+     * IVA correction that rides on EVERY Moloni → WooCommerce price sync: Moloni
+     * is always the source of truth for the tax rate, so before pricing we make
+     * the WooCommerce tax status/class agree with the Moloni taxes (via
+     * applyTaxClass) — NOT gated by the per-field IVA toggle, which governs the
+     * standalone field sweep. Logs the correction. Only stages the change; the
+     * caller persists it.
+     *
+     * @param WC_Product $wcProduct     WooCommerce product
+     * @param array      $moloniProduct Moloni product payload (needs 'taxes')
+     *
+     * @return bool True when the tax status/class was corrected (needs saving)
+     */
+    public static function correctTaxFromMoloni(WC_Product $wcProduct, array $moloniProduct): bool
+    {
+        if (!self::applyTaxClass($wcProduct, $moloniProduct)) {
+            return false;
+        }
+
+        Storage::$LOGGER->info(__('IVA do produto corrigido a partir do Moloni (sincronização de preço)'), [
+            'tag' => 'helper:moloniproduct:taxcorrected',
+            'wc_id' => $wcProduct->get_id(),
+            'reference' => (string)($moloniProduct['reference'] ?? ''),
+            'tax_status' => $wcProduct->get_tax_status(),
+            'tax_class' => $wcProduct->get_tax_class(),
+        ]);
+
+        return true;
+    }
+
+    /**
      * Apply the per-field Moloni → WooCommerce syncs (EAN, tax) that are enabled
      * in Settings. Only stages changes; returns whether the product needs saving.
      *
@@ -312,6 +342,12 @@ class MoloniProduct
             return;
         }
 
+        // IVA: Moloni is ALWAYS the source of truth on a Moloni→WC price sync —
+        // correct the WC tax status/class before the floor is computed (the floor
+        // VAT itself already comes from the Moloni taxes array). Persisted by the
+        // save at the end of this method (or explicitly on the early return).
+        $taxCorrected = self::correctTaxFromMoloni($wcProduct, $moloniProduct);
+
         // Supplier info carries BOTH the discounted net cost and the discount %
         // used by the margin tiers — one lookup serves both purposes.
         if (!empty($moloniProduct['suppliers'])) {
@@ -326,6 +362,10 @@ class MoloniProduct
             $fetched = self::fetchCostPrice((int)$moloniProduct['product_id']);
 
             if ($fetched === null) {
+                if ($taxCorrected) {
+                    $wcProduct->save(); // keep the IVA fix even without a cost
+                }
+
                 return;
             }
 
@@ -375,6 +415,13 @@ class MoloniProduct
             return 'skipped';
         }
 
+        // IVA: Moloni is ALWAYS the source of truth on a Moloni→WC price sync —
+        // verify/correct the WooCommerce tax status/class BEFORE pricing, so the
+        // stored incl-VAT price (computed from the MOLONI taxes below) and the
+        // rate WooCommerce charges at checkout are the same. Staged here;
+        // persisted by the saves below (or explicitly on the early return).
+        $taxCorrected = self::correctTaxFromMoloni($wcProduct, $moloniProduct);
+
         // Supplier info: discounted net cost + discount % for the tier selection.
         if (!empty($moloniProduct['suppliers'])) {
             $discountInfo = self::extractSupplierDiscount($moloniProduct);
@@ -390,6 +437,10 @@ class MoloniProduct
         }
 
         if ($costPrice <= 0) {
+            if ($taxCorrected) {
+                $wcProduct->save(); // keep the IVA fix even when there is no cost
+            }
+
             return 'no_cost'; // no cost in Moloni — nothing to derive a price from
         }
 

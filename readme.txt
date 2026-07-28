@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.6.1
+Stable tag: 5.7.0
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,10 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.7.0 =
+* NOVO: o Moloni é SEMPRE a fonte do IVA correto nas sincronizações de preço Moloni → WooCommerce. Antes de calcular qualquer preço (piso do preço de custo E ferramenta "Atualizar preços de venda"), o plugin verifica se o produto WooCommerce tem o estado/classe de taxa correspondente ao IVA do artigo Moloni e corrige-o se necessário (sem taxas → "Nenhum"; IVA percentual → classe com a mesma percentagem; sem classe correspondente → registado no log, classe não alterada). Correção independente da opção "IVA (classe de taxa)" da sincronização de campos, que continua a governar apenas o varrimento de campos. Cada correção fica registada no log.
+* As contas do preço com IVA continuam a usar a informação de taxas DO MOLONI (não a classe do site) — a correção da classe garante que o checkout do WooCommerce cobra exatamente a mesma taxa que foi usada para calcular o preço.
+
 = 5.6.1 =
 * FIX (importação Moloni → WooCommerce): quando o WooCommerce guarda preços COM IVA, o preço importado somava a PERCENTAGEM do IVA em euros em vez de multiplicar — um artigo de 10,00 € s/ IVA a 23% ficava 33,00 € em vez de 12,30 €. Agora soma as taxas IVA percentuais do artigo e multiplica uma única vez (mesma convenção do piso de preço mínimo), arredondando a 2 casas. Taxas fixas/IS não entram no preço de montra.
 
