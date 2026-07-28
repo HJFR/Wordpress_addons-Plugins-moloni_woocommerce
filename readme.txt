@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.4.0
+Stable tag: 5.6.0
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,17 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.6.0 =
+* NOVO: 2 ferramentas de PREÇOS em Ferramentas, ambas apenas para produtos que existem nas duas plataformas (por referência/SKU), em segundo plano, retomáveis e canceláveis:
+* — "Atualizar preços de venda (Moloni → WooCommerce)": RECALCULA o preço de venda pelas regras do plugin — preço de custo c/ desconto do fornecedor × margem do escalão (base se nenhum encaixar) × IVA quando os preços do site o incluem — e DEFINE-O para cima ou para baixo (ao contrário do piso automático, que apenas sobe preços abaixo do mínimo). Produtos sem custo no Moloni ficam inalterados; atualiza também o custo/desconto guardados no produto.
+* — "Igualar preços no Moloni (WooCommerce → Moloni)": o preço de venda do artigo Moloni fica IGUAL ao preço do site (sem IVA); todos os restantes campos do artigo são ecoados tal como estão. Sem preço no site → inalterado; nunca zera preços.
+
+= 5.5.0 =
+* NOVO: 2 ferramentas de sincronização de campos em Ferramentas, uma por direção, que atuam APENAS nos produtos que existem nas duas plataformas (correspondência por referência/SKU) e APENAS nos campos ativados nas Configurações:
+* — "Sincronizar campos Moloni → WooCommerce": aplica EAN/IVA/preço de custo (conforme ativado) a todos os produtos correspondidos; NUNCA altera stock nem cria produtos. Corre em segundo plano em lotes (cron 5 min), por prioridade, retomável e cancelável — mesmo com a sincronização automática de stocks desligada.
+* — "Sincronizar campos WooCommerce → Moloni": envia EAN/preço/propriedades/imagem/resumo (conforme ativado) para os artigos Moloni correspondidos; todos os RESTANTES dados do artigo Moloni (nome, categoria, taxas, stock) são ecoados tal como estão (products/update exige os campos obrigatórios — nunca são recalculados a partir do WooCommerce). NUNCA cria artigos. Igualmente em segundo plano, retomável e cancelável.
+* — As sincronizações existentes (stock automática, completa, criar/atualizar ao guardar) mantêm o comportamento por defeito; só estas 2 ferramentas fazem sync exclusivamente por campo.
+
 = 5.4.0 =
 * NOVO: Sincronização de campos configurável, em duas direções, em Configurações → "Sincronização de campos". Cada campo tem a sua própria opção Sim/Não; as predefinições preservam exatamente o comportamento anterior.
 * NOVO (Moloni → WooCommerce): EAN — o EAN do Moloni é escrito no campo GTIN nativo do WooCommerce (`_global_unique_id`, WC 9.2+) e na meta `_barcode`; o Moloni é a fonte de verdade e um EAN vazio nunca apaga o existente (predefinição: ativo).
@@ -87,13 +98,6 @@ New plugin version fully re-written
 * — Propriedades: atributos WooCommerce → propriedades de artigo Moloni ({property_id, value}); propriedades em falta criadas por nome via productProperties/insert com cache por pedido (1× getAll); artigos sem atributos nunca limpam propriedades existentes (predefinição: inativo).
 * — Imagem destacada: envio multipart em melhor esforço (a API pública Moloni não documenta upload de imagens); JPEG/PNG/GIF/WebP até 2 MB (filtro moloni_image_max_bytes); só reenvia quando o ficheiro muda (hash md5 em meta) — falhas ficam no log e nunca bloqueiam a sincronização de dados (predefinição: inativo).
 * — Resumo: descrição curta do WooCommerce (texto simples, limitada) → "Resumo" do Moloni; vazia nunca apaga o resumo existente (predefinição: inativo).
-* NOVO: 2 ferramentas de sincronização de campos em Ferramentas, uma por direção, que atuam APENAS nos produtos que existem nas duas plataformas (correspondência por referência/SKU) e APENAS nos campos ativados nas Configurações:
-* — "Sincronizar campos Moloni → WooCommerce": aplica EAN/IVA/preço de custo (conforme ativado) a todos os produtos correspondidos; NUNCA altera stock nem cria produtos. Corre em segundo plano em lotes (cron 5 min), por prioridade, retomável e cancelável — mesmo com a sincronização automática de stocks desligada.
-* — "Sincronizar campos WooCommerce → Moloni": envia EAN/preço/propriedades/imagem/resumo (conforme ativado) para os artigos Moloni correspondidos; todos os RESTANTES dados do artigo Moloni (nome, categoria, taxas, stock) são ecoados tal como estão (products/update exige os campos obrigatórios — nunca são recalculados a partir do WooCommerce). NUNCA cria artigos. Igualmente em segundo plano, retomável e cancelável.
-* — As sincronizações existentes (stock automática, completa, criar/atualizar ao guardar) mantêm o comportamento por defeito; só estas 2 ferramentas fazem sync exclusivamente por campo.
-* NOVO: 2 ferramentas de PREÇOS em Ferramentas, ambas apenas para produtos que existem nas duas plataformas (por referência/SKU), em segundo plano, retomáveis e canceláveis:
-* — "Atualizar preços de venda (Moloni → WooCommerce)": RECALCULA o preço de venda pelas regras do plugin — preço de custo c/ desconto do fornecedor × margem do escalão (base se nenhum encaixar) × IVA quando os preços do site o incluem — e DEFINE-O para cima ou para baixo (ao contrário do piso automático, que apenas sobe preços abaixo do mínimo). Produtos sem custo no Moloni ficam inalterados; atualiza também o custo/desconto guardados no produto.
-* — "Igualar preços no Moloni (WooCommerce → Moloni)": o preço de venda do artigo Moloni fica IGUAL ao preço do site (sem IVA); todos os restantes campos do artigo são ecoados tal como estão. Sem preço no site → inalterado; nunca zera preços.
 * NOVO: Filtro de estado na página de produtos Moloni (Ferramentas): "Não existe no WooCommerce" / "Stock diferente do Moloni" (aplica-se à página atual da listagem).
 * LIMITES API: a deteção de alterações evita chamadas desnecessárias (comparação campo-a-campo antes de products/update, incluindo propriedades; hash de imagem); tudo passa pelo limitador de 60 pedidos/min.
 * SEGURANÇA: sem novas superfícies de entrada além das opções (nonce + sanitização existentes); valores de propriedades/resumo em texto simples e limitados; upload de imagem validado (ficheiro real de imagem, tipo permitido, tamanho máximo) e o binário nunca é registado nos logs.
