@@ -38,11 +38,31 @@ class SyncStockByPriority
 {
     use ProcessesProductStock;
 
-    /** wp_options key holding the resumable progress state (array {phase,page,stats}). */
+    /** wp_options key holding the resumable progress state (array {phase,page,stats,mode}). */
     public const STATE_OPTION = 'moloni_full_sync_state';
 
     /** wp_options key acting as the cancel signal. Presence = cancel requested. */
     public const CANCEL_OPTION = 'moloni_full_sync_cancel';
+
+    /** Sweep mode: stock + fields + cost (the original full sync). */
+    public const MODE_STOCK = 'stock';
+
+    /**
+     * Sweep mode: FIELDS ONLY, Moloni → WooCommerce — applies the per-field
+     * syncs enabled in Settings (EAN, IVA, preço de custo + piso) to every
+     * Moloni product that EXISTS in WooCommerce (matched by SKU/reference).
+     * Never touches stock and never creates products.
+     */
+    public const MODE_FIELDS = 'fields';
+
+    /**
+     * Sweep mode: FIELDS ONLY, WooCommerce → Moloni — pushes the per-field syncs
+     * enabled in Settings (EAN, preço, propriedades, resumo, imagem) to every
+     * WooCommerce product that EXISTS in Moloni (matched by SKU/reference), via
+     * Product::updateFieldsOnly(), which echoes every other Moloni field back
+     * unchanged. Never creates products in Moloni.
+     */
+    public const MODE_FIELDS_WM = 'fields_wm';
 
     /**
      * Priority phases. Each phase selects WooCommerce products by post status +
@@ -72,6 +92,9 @@ class SyncStockByPriority
     private $batch;
     private $throttleUs;
 
+    /** @var string Sweep mode (MODE_STOCK | MODE_FIELDS) */
+    private $mode = self::MODE_STOCK;
+
     private $phaseComplete = false;
     private $cancelled = false;
 
@@ -82,10 +105,11 @@ class SyncStockByPriority
     private $locked = [];
     private $pricedOnly = 0;
 
-    public function __construct(int $phase, int $page = 1, int $batchOverride = 0)
+    public function __construct(int $phase, int $page = 1, int $batchOverride = 0, string $mode = self::MODE_STOCK)
     {
         $this->phase = $phase;
         $this->page = max(1, $page);
+        $this->mode = self::normalizeMode($mode);
 
         $this->batch = self::DEFAULT_BATCH;
         if ((int)$batchOverride > 0) {
@@ -177,6 +201,18 @@ class SyncStockByPriority
                 continue;
             }
 
+            // FIELDS WC→Moloni mode: push only the enabled fields to the matched
+            // Moloni product (updateFieldsOnly echoes everything else unchanged).
+            if ($this->mode === self::MODE_FIELDS_WM) {
+                $this->pushFieldsToMoloni($wcProduct, $reference);
+
+                if ($this->throttleUs > 0) {
+                    usleep($this->throttleUs);
+                }
+
+                continue;
+            }
+
             try {
                 $mlProduct = Curl::simple('products/getByReference', [
                     'reference' => $reference,
@@ -201,6 +237,36 @@ class SyncStockByPriority
             }
 
             $mlProduct = $mlProduct[0];
+
+            // FIELDS mode: apply only the per-field syncs enabled in Settings
+            // (EAN, IVA, custo + piso de preço) — never touch stock.
+            if ($this->mode === self::MODE_FIELDS) {
+                try {
+                    // The saves below fire woocommerce_update_product — suppress the
+                    // WC→Moloni push hook for this product so a Moloni→WC field sync
+                    // can never trigger a reverse full update.
+                    \Moloni\Helpers\SyncLogs::addTimeout(\Moloni\Enums\SyncLogsType::WC_PRODUCT, (int)$wcProduct->get_id());
+
+                    $fresh = wc_get_product($wcProduct->get_id());
+
+                    if ($fresh) {
+                        $this->syncCostPriceFallback($mlProduct, $fresh);
+                        $this->pricedOnly++;
+                    }
+                } catch (\Exception $error) {
+                    Storage::$LOGGER->error(__('Erro ao sincronizar campos do produto'), [
+                        'tag' => 'fields:sync:priority:error',
+                        'reference' => $reference,
+                        'message' => $error->getMessage(),
+                    ]);
+                }
+
+                if ($this->throttleUs > 0) {
+                    usleep($this->throttleUs);
+                }
+
+                continue;
+            }
 
             if (empty($mlProduct['has_stock'])) {
                 // Not stock-managed in Moloni — do NOT touch WC stock, but still
@@ -242,6 +308,44 @@ class SyncStockByPriority
         }
 
         return $this;
+    }
+
+    /**
+     * Push the enabled WC→Moloni fields for one product. Never throws — failures
+     * are logged so one bad product never aborts the batch.
+     *
+     * @param object $wcProduct WooCommerce product
+     * @param string $reference SKU/reference (match key + logging)
+     */
+    private function pushFieldsToMoloni($wcProduct, string $reference): void
+    {
+        try {
+            // Suppress the woocommerce_update_product hook for this product for a
+            // few seconds: updateFieldsOnly()/syncImage() may save() WC meta, and
+            // without this a loaded ProductUpdate hook would push a FULL update
+            // (all fields) — defeating the whole point of a fields-only sweep.
+            \Moloni\Helpers\SyncLogs::addTimeout(\Moloni\Enums\SyncLogsType::WC_PRODUCT, (int)$wcProduct->get_id());
+
+            $controller = new \Moloni\Controllers\Product($wcProduct);
+
+            if (!$controller->loadByReference()) {
+                $this->notFound[$reference] = __('Produto não encontrado na conta Moloni');
+
+                return;
+            }
+
+            if ($controller->updateFieldsOnly()) {
+                $this->updated[$reference] = __('Campos atualizados no Moloni');
+            } else {
+                $this->equal[$reference] = __('Campos já corretos no Moloni');
+            }
+        } catch (\Exception $error) {
+            Storage::$LOGGER->error(__('Erro ao sincronizar campos para o Moloni'), [
+                'tag' => 'fields:sync:priority:wm:error',
+                'reference' => $reference,
+                'message' => $error->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -335,7 +439,7 @@ class SyncStockByPriority
     /**
      * Read the resumable progress state. Returns null when no full sync is armed.
      *
-     * @return array|null {phase:int, page:int, stats:array}
+     * @return array|null {phase:int, page:int, stats:array, mode:string}
      */
     public static function getState(): ?array
     {
@@ -355,15 +459,30 @@ class SyncStockByPriority
             'phase' => (int)$state['phase'],
             'page' => max(1, (int)($state['page'] ?? 1)),
             'stats' => is_array($state['stats'] ?? null) ? $state['stats'] : [],
+            // States written by pre-5.4 versions carry no mode — they are stock sweeps.
+            'mode' => self::normalizeMode((string)($state['mode'] ?? self::MODE_STOCK)),
         ];
+    }
+
+    /**
+     * Clamp a mode string to one of the known sweep modes (unknown → stock).
+     */
+    public static function normalizeMode(string $mode): string
+    {
+        return in_array($mode, [self::MODE_FIELDS, self::MODE_FIELDS_WM], true) ? $mode : self::MODE_STOCK;
     }
 
     /**
      * Persist progress. Stored non-autoloaded (transient-like progress state).
      */
-    public static function setState(int $phase, int $page, array $stats = []): void
+    public static function setState(int $phase, int $page, array $stats = [], string $mode = self::MODE_STOCK): void
     {
-        $value = ['phase' => $phase, 'page' => max(1, $page), 'stats' => $stats];
+        $value = [
+            'phase' => $phase,
+            'page' => max(1, $page),
+            'stats' => $stats,
+            'mode' => self::normalizeMode($mode),
+        ];
 
         if (get_option(self::STATE_OPTION, false) === false) {
             add_option(self::STATE_OPTION, $value, '', false);
@@ -373,19 +492,22 @@ class SyncStockByPriority
     }
 
     /**
-     * Arm the priority full sync at phase 1. Returns false if already armed.
+     * Arm the priority full sync at phase 1, in the given mode. Returns false if
+     * a sweep (either mode) is already armed.
      */
-    public static function arm(): bool
+    public static function arm(string $mode = self::MODE_STOCK): bool
     {
         if (get_option(self::STATE_OPTION, false) !== false) {
             return false;
         }
 
+        $mode = self::normalizeMode($mode);
+
         // Atomically claim the armed state first. add_option() returns false if the
         // option already exists (a concurrent double-click lost the race) — bail
         // WITHOUT touching the cancel flag, so we never accidentally un-cancel a
         // sweep that another request is already cancelling.
-        $added = add_option(self::STATE_OPTION, ['phase' => 1, 'page' => 1, 'stats' => []], '', false);
+        $added = add_option(self::STATE_OPTION, ['phase' => 1, 'page' => 1, 'stats' => [], 'mode' => $mode], '', false);
 
         if (!$added) {
             return false;

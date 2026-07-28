@@ -172,6 +172,12 @@ class Plugin
                     case 'syncStocksFull':
                         $this->syncStocksFull();
                         break;
+                    case 'syncFieldsToWc':
+                        $this->syncFieldsToWc();
+                        break;
+                    case 'syncFieldsToMoloni':
+                        $this->syncFieldsToMoloni();
+                        break;
                     case 'syncStocksCancel':
                         $this->syncStocksCancel();
                         break;
@@ -512,22 +518,153 @@ class Plugin
                 'action' => 'stock:sync:manual:full:armed',
             ]);
         } else {
-            $state = SyncStockByPriority::getState();
-            $phase = $state['phase'] ?? 1;
-            $label = SyncStockByPriority::PHASES[$phase]['label'] ?? '';
+            $this->noticeSweepAlreadyRunning();
+        }
+    }
 
+    /**
+     * Arm the FIELD sync sweep Moloni → WooCommerce: applies ONLY the per-field
+     * syncs enabled in Settings (EAN, IVA, preço de custo + piso) to every Moloni
+     * product that exists in WooCommerce (matched by SKU). Never touches stock,
+     * never creates products. Background batches via the 5-min cron, cancellable.
+     *
+     * @return void
+     */
+    private function syncFieldsToWc(): void
+    {
+        check_admin_referer('moloni_sync_fields_to_wc');
+
+        $enabled = [];
+
+        if (\Moloni\Helpers\SyncFields::mwEan()) {
+            $enabled[] = __('EAN');
+        }
+        if (\Moloni\Helpers\SyncFields::mwTax()) {
+            $enabled[] = __('IVA');
+        }
+        if (defined('MOLONI_COST_PRICE_SYNC') && (int)MOLONI_COST_PRICE_SYNC === 1) {
+            $enabled[] = __('preço de custo');
+        }
+
+        if (empty($enabled)) {
             add_settings_error(
                 'moloni',
-                'moloni-full-sync-running',
+                'moloni-fields-sync-none',
+                __('Nenhum campo Moloni → WooCommerce está ativo nas Configurações ("Sincronização de campos") — ativa pelo menos um (EAN, IVA ou preço de custo) antes de iniciar.')
+            );
+
+            return;
+        }
+
+        if (SyncStockByPriority::arm(SyncStockByPriority::MODE_FIELDS)) {
+            add_settings_error(
+                'moloni',
+                'moloni-fields-sync-armed',
                 sprintf(
-                    __('Sincronização completa já em curso (fase %1$d/%2$d: %3$s) — continua em segundo plano a cada 5 minutos.'),
-                    (int) $phase,
-                    SyncStockByPriority::LAST_PHASE,
-                    $label
+                    __('Sincronização de campos Moloni → WooCommerce agendada (campos ativos: %s) — decorre em segundo plano, em lotes a cada 5 minutos, apenas para produtos que existem nas duas plataformas. O stock não é alterado. Podes cancelar aqui a qualquer momento.'),
+                    implode(', ', $enabled)
                 ),
                 'updated'
             );
+
+            Storage::$LOGGER->info(__('Sincronização de campos Moloni → WooCommerce agendada (manual)'), [
+                'action' => 'fields:sync:manual:mw:armed',
+                'fields' => $enabled,
+            ]);
+        } else {
+            $this->noticeSweepAlreadyRunning();
         }
+    }
+
+    /**
+     * Arm the FIELD sync sweep WooCommerce → Moloni: pushes ONLY the per-field
+     * syncs enabled in Settings (EAN, preço, propriedades, resumo, imagem) to
+     * every WooCommerce product that exists in Moloni (matched by SKU), echoing
+     * all other Moloni fields back unchanged. Never creates products in Moloni.
+     * Background batches via the 5-min cron, cancellable.
+     *
+     * @return void
+     */
+    private function syncFieldsToMoloni(): void
+    {
+        check_admin_referer('moloni_sync_fields_to_moloni');
+
+        $enabled = [];
+
+        if (\Moloni\Helpers\SyncFields::wmEan()) {
+            $enabled[] = __('EAN');
+        }
+        if (\Moloni\Helpers\SyncFields::wmPrice()) {
+            $enabled[] = __('preço de venda');
+        }
+        if (\Moloni\Helpers\SyncFields::wmProperties()) {
+            $enabled[] = __('propriedades');
+        }
+        if (\Moloni\Helpers\SyncFields::wmImage()) {
+            $enabled[] = __('imagem');
+        }
+        if (\Moloni\Helpers\SyncFields::wmSummary()) {
+            $enabled[] = __('resumo');
+        }
+
+        if (empty($enabled)) {
+            add_settings_error(
+                'moloni',
+                'moloni-fields-sync-wm-none',
+                __('Nenhum campo WooCommerce → Moloni está ativo nas Configurações ("Sincronização de campos") — ativa pelo menos um (EAN, preço, propriedades, imagem ou resumo) antes de iniciar.')
+            );
+
+            return;
+        }
+
+        if (SyncStockByPriority::arm(SyncStockByPriority::MODE_FIELDS_WM)) {
+            add_settings_error(
+                'moloni',
+                'moloni-fields-sync-wm-armed',
+                sprintf(
+                    __('Sincronização de campos WooCommerce → Moloni agendada (campos ativos: %s) — decorre em segundo plano, em lotes a cada 5 minutos, apenas para produtos que existem nas duas plataformas. Os restantes dados do artigo Moloni ficam exatamente como estão. Podes cancelar aqui a qualquer momento.'),
+                    implode(', ', $enabled)
+                ),
+                'updated'
+            );
+
+            Storage::$LOGGER->info(__('Sincronização de campos WooCommerce → Moloni agendada (manual)'), [
+                'action' => 'fields:sync:manual:wm:armed',
+                'fields' => $enabled,
+            ]);
+        } else {
+            $this->noticeSweepAlreadyRunning();
+        }
+    }
+
+    /**
+     * Shared "a sweep is already running" notice, naming the running mode so the
+     * user knows what to cancel first.
+     *
+     * @return void
+     */
+    private function noticeSweepAlreadyRunning(): void
+    {
+        $state = SyncStockByPriority::getState();
+        $mode = $state['mode'] ?? SyncStockByPriority::MODE_STOCK;
+
+        $labels = [
+            SyncStockByPriority::MODE_STOCK => __('sincronização completa de stocks'),
+            SyncStockByPriority::MODE_FIELDS => __('sincronização de campos Moloni → WooCommerce'),
+            SyncStockByPriority::MODE_FIELDS_WM => __('sincronização de campos WooCommerce → Moloni'),
+        ];
+
+        add_settings_error(
+            'moloni',
+            'moloni-sweep-running',
+            sprintf(
+                __('Já existe um varrimento em curso (%1$s, fase %2$d/%3$d) — espera que termine ou cancela-o antes de iniciar outro.'),
+                $labels[$mode] ?? $mode,
+                (int)($state['phase'] ?? 1),
+                SyncStockByPriority::LAST_PHASE
+            ),
+            'updated'
+        );
     }
 
     /**

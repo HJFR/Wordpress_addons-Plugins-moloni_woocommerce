@@ -188,6 +188,124 @@ class Product
         throw new GenericException(__('Erro ao atualizar o produto') . $this->name);
     }
 
+    /**
+     * Push ONLY the per-field WooCommerce → Moloni syncs enabled in Settings
+     * (EAN, preço, propriedades, resumo, imagem) to an EXISTING Moloni product.
+     *
+     * Used by the Tools "field sync" sweep. Unlike update(), nothing else is
+     * recalculated from WooCommerce: every other mandatory update field
+     * (category, type, name, unit, stock flags, taxes, visibility) is echoed
+     * back exactly as loaded from Moloni, so this can never move a product to
+     * another category, rename it or touch its taxes/stock.
+     *
+     * Requires loadByReference() to have succeeded first.
+     *
+     * @return bool True when an update was actually sent (false = already in sync;
+     *              the image has its own hash-based change detection either way)
+     *
+     * @throws APIException
+     * @throws GenericException
+     */
+    public function updateFieldsOnly(): bool
+    {
+        if (empty($this->product_id) || empty($this->moloniProduct)) {
+            throw new GenericException(__('Produto Moloni não carregado'));
+        }
+
+        // The match key stays the MOLONI reference — never recalculated here.
+        $this->reference = (string)($this->moloniProduct['reference'] ?? '');
+
+        // Selected fields, via the same toggle-aware setters as the normal flow:
+        // each one keeps the Moloni value when its toggle is off (or empty).
+        $this->setPrice();
+        $this->setEan();
+        $this->setSummary();
+        $this->setProperties();
+
+        $values = [
+            'product_id' => $this->product_id,
+            // Mandatory update fields echoed back unchanged from Moloni:
+            'category_id' => (int)($this->moloniProduct['category_id'] ?? 0),
+            'type' => (int)($this->moloniProduct['type'] ?? 1),
+            'name' => (string)($this->moloniProduct['name'] ?? ''),
+            'reference' => $this->reference,
+            'unit_id' => (int)($this->moloniProduct['unit_id'] ?? 0),
+            'has_stock' => (int)($this->moloniProduct['has_stock'] ?? 0),
+            'stock' => (float)($this->moloniProduct['stock'] ?? 0),
+            'visibility_id' => (int)($this->moloniProduct['visibility_id'] ?? 1),
+            // Selected fields (setters above already respected the toggles):
+            'summary' => $this->summary,
+            'price' => $this->price,
+        ];
+
+        // Taxes/exemption echoed back as-is so they are never cleared by omission.
+        $taxes = [];
+
+        foreach (($this->moloniProduct['taxes'] ?? []) as $order => $tax) {
+            if (!is_array($tax)) {
+                continue;
+            }
+
+            $taxId = (int)($tax['tax_id'] ?? ($tax['tax']['tax_id'] ?? 0));
+
+            if ($taxId <= 0) {
+                continue;
+            }
+
+            $taxes[] = [
+                'tax_id' => $taxId,
+                'value' => (float)($tax['value'] ?? 0),
+                'order' => (int)($tax['order'] ?? $order),
+                'cumulative' => (int)($tax['cumulative'] ?? 0),
+            ];
+        }
+
+        $values['taxes'] = $taxes;
+
+        if (!empty($this->moloniProduct['exemption_reason'])) {
+            $values['exemption_reason'] = (string)$this->moloniProduct['exemption_reason'];
+        }
+
+        if (!empty($this->ean)) {
+            $values['ean'] = $this->ean;
+        }
+
+        if (!empty($this->properties)) {
+            $values['properties'] = $this->properties;
+        }
+
+        // Change detection per enabled field — no API call when already in sync.
+        $changed =
+            (SyncFields::wmPrice() && round((float)$values['price'], 5) !== round((float)($this->moloniProduct['price'] ?? 0), 5)) ||
+            (SyncFields::wmEan() && !empty($this->ean) && $this->ean !== (string)($this->moloniProduct['ean'] ?? '')) ||
+            (SyncFields::wmSummary() && (string)$values['summary'] !== (string)($this->moloniProduct['summary'] ?? '')) ||
+            self::propertiesDiffer($values['properties'] ?? [], $this->moloniProduct['properties'] ?? []);
+
+        if ($changed) {
+            $update = Curl::simple('products/update', $values);
+
+            if (!isset($update['product_id'])) {
+                throw new GenericException(__('Erro ao atualizar campos do produto') . ' ' . $this->reference);
+            }
+
+            Storage::$LOGGER->info(
+                str_replace('{0}', $this->reference, __('Campos sincronizados no Moloni ({0})')),
+                [
+                    'tag' => 'controller:product:fieldsonly',
+                    'product_id' => $this->product_id,
+                    'props' => $values,
+                ]
+            );
+        }
+
+        // Image: own toggle + hash change detection inside. Pass the echoed
+        // payload so the multipart update also only carries Moloni-preserving
+        // fields (never the full WC-derived payload).
+        $this->syncImage($values);
+
+        return $changed;
+    }
+
     //          Gets          //
 
     /**
@@ -709,7 +827,7 @@ class Product
      *    product meta) → no-op, so bulk saves never re-upload — this is what keeps
      *    the feature cheap under the 60 req/min API quota.
      */
-    private function syncImage(): void
+    private function syncImage(?array $propsOverride = null): void
     {
         if (!SyncFields::wmImage() || empty($this->product_id)) {
             return;
@@ -767,8 +885,10 @@ class Product
             }
 
             // Re-send the current product payload with the file attached — the
-            // update endpoint requires the mandatory fields either way.
-            $props = $this->mapPropsToValues();
+            // update endpoint requires the mandatory fields either way. A caller
+            // may inject its own payload (the fields-only sweep echoes Moloni's
+            // values so the image upload cannot alter anything else).
+            $props = $propsOverride ?? $this->mapPropsToValues();
             $props['product_id'] = $this->product_id;
             $props['price'] = $props['price'] ?? $this->price;
 
