@@ -165,19 +165,36 @@ class CreateProduct extends ImportService
      */
     private function setPrice()
     {
-        $price = $this->moloniProduct['price'];
+        $price = (float)$this->moloniProduct['price'];
 
-        // If WooCommerce shows prices WITH tax, add tax to the Moloni net price
+        // Moloni prices are WITHOUT tax. When WooCommerce stores prices WITH
+        // tax, apply the product's IVA percentage(s): sum the percentage rates
+        // (same convention as MoloniProduct::calculateMinimumSalePrice) and
+        // multiply ONCE. The old code ADDED the percentage as euros (10 € at
+        // 23% became 33 € instead of 12,30 €).
         if (wc_prices_include_tax() && !empty($this->moloniProduct['taxes'])) {
+            $ivaRate = 0.0;
+
             foreach ($this->moloniProduct['taxes'] as $tax) {
-                // Add each tax value to the price
-                // Note: This assumes 'value' is the percentage, but the calculation
-                // here just adds it - this might be a bug, should multiply by percentage
-                $price += (float)$tax['value'];
+                $taxData = $tax['tax'] ?? $tax;
+
+                // Only percentage IVA taxes shape the consumer price this way;
+                // stamp duty / fixed taxes are not part of a shop display price.
+                if (
+                    isset($taxData['saft_type'], $taxData['type']) &&
+                    (int)$taxData['saft_type'] === SaftType::IVA &&
+                    (int)$taxData['type'] === TaxType::PERCENTAGE
+                ) {
+                    $ivaRate += (float)($taxData['value'] ?? $tax['value'] ?? 0);
+                }
+            }
+
+            if ($ivaRate > 0) {
+                $price = round($price * (1 + $ivaRate / 100), 2);
             }
         }
 
-        $this->wcProduct->set_regular_price($price);
+        $this->wcProduct->set_regular_price((string)$price);
     }
 
     /** @var float|null Cached cost price fetched from Moloni */

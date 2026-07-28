@@ -4,7 +4,7 @@ Requires Plugins: woocommerce
 Tags: Invoicing, Orders
 Requires at least: 4.6
 Tested up to: 6.7.1
-Stable tag: 5.6.0
+Stable tag: 5.6.1
 Requires PHP: 7.2
 WC tested up to: 9.6.0
 License: GPLv2 or later
@@ -76,6 +76,9 @@ Released plugin version 3.
 New plugin version fully re-written
 
 == changelog ==
+= 5.6.1 =
+* FIX (importação Moloni → WooCommerce): quando o WooCommerce guarda preços COM IVA, o preço importado somava a PERCENTAGEM do IVA em euros em vez de multiplicar — um artigo de 10,00 € s/ IVA a 23% ficava 33,00 € em vez de 12,30 €. Agora soma as taxas IVA percentuais do artigo e multiplica uma única vez (mesma convenção do piso de preço mínimo), arredondando a 2 casas. Taxas fixas/IS não entram no preço de montra.
+
 = 5.6.0 =
 * NOVO: 2 ferramentas de PREÇOS em Ferramentas, ambas apenas para produtos que existem nas duas plataformas (por referência/SKU), em segundo plano, retomáveis e canceláveis:
 * — "Atualizar preços de venda (Moloni → WooCommerce)": RECALCULA o preço de venda pelas regras do plugin — preço de custo c/ desconto do fornecedor × margem do escalão (base se nenhum encaixar) × IVA quando os preços do site o incluem — e DEFINE-O para cima ou para baixo (ao contrário do piso automático, que apenas sobe preços abaixo do mínimo). Produtos sem custo no Moloni ficam inalterados; atualiza também o custo/desconto guardados no produto.
